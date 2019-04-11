@@ -102,10 +102,10 @@ protected:
 	size_t getIndex(string key);
 
 private:
-	string m_Title;
-	size_t m_HeaderLength;
-	size_t m_IndexDB;
-	key_t m_Key;
+	string m_Title;  // The title of this channel
+	size_t m_HeaderLength;  // The header length of message
+	//size_t m_IndexDB;  // The database
+	key_t m_Key;  // The key of the message queue
 };
 
 #endif // SERVICEUTILS_H

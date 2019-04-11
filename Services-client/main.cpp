@@ -27,10 +27,21 @@ int main()
 	string User;
 	string Password;
 	string CloudServer;
+	int WAP;
+	string Luanguage;
+	string ActiveTriggers;
+	int AutoUpload;
 
 	tester->dbMap("PreEvent", &PreEvent, 1);
 	tester->dbMap("Chunk", &Chunk, 1);
-	tester->dbMap("CamPath", &CamPath, 0);
+	tester->dbMap("CamPath", &CamPath);
+	tester->dbMap("User", &User);
+	tester->dbMap("PassWord", &Password);
+	tester->dbMap("Cloud Server", &CloudServer, 0);
+	tester->dbMap("WAP", &WAP, 1);
+	tester->dbMap("Luanguage", &Luanguage, 0);
+	tester->dbMap("Active Triggers", &ActiveTriggers, 0);
+	tester->dbMap("Auto upload", &AutoUpload, 1);
 
 	char txt[64];
 	size_t type;

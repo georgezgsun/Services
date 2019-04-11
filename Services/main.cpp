@@ -26,9 +26,9 @@ int main(int argc, char *argv[])
 	string tmp;
 
 	string serviceList[5] = { "SERVER", "GPS", "Radar", "Trigger", "FrontCam" };
-	long serviceChannels[5] = { 1,3,4,5,19 };
+	char serviceChannels[5] = { 1,3,4,5,19 };
 	string DBKeywords[10] = { "PreEvent", "Chunk", "CamPath", "User", "PassWord", "Cloud Server", "WAP", "Luanguage", "Active Triggers", "Auto upload" };
-	size_t DBTypes[10] = { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
+	char  DBTypes[10] = { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
 	string stringDBValues[10] = { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24,54,54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
 	long watchdogs[5] = { 0, 0, 0, 0, 0 };
 
@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
 	size_t DBLength = 0;
 	size_t type;
 	size_t len = 0;
-	size_t offset = 0;;
+	size_t offset = 0;
 	pid_t pid;
 	pid_t ppid;
 	string sTitle;
@@ -54,22 +54,32 @@ int main(int argc, char *argv[])
 	struct timeval tv;
 
 	// Prepare the database query results. This is a simulation.
-	for (int i = 0; i < 10; i++)
+	// [index_1][len_1][data_1][index_2][len_2][data_2] ... [index_n][len_n][data_n] ; end with index=/0, index and length are of size 1 byte
+	for (size_t i = 0; i < 10; i++)
 	{
-		memcpy(DBText + offset, &DBTypes[i], sizeof(size_t));
-		offset += sizeof(size_t);
+		// assign the index
+		DBText[offset++] = i & 0xFF;
 
+		// assign the value
 		if (DBTypes[i] == 0)
 		{
-			memcpy(DBText + offset, stringDBValues[i].c_str(), stringDBValues[i].length());
-			offset += stringDBValues[i].length();
+			len = stringDBValues[i].length() + 1;
+			//assign the length
+			DBText[offset++] = len & 0xFF;
+
+			// string value is assigned differently, there is a /0 at the end
+			memcpy(DBText + offset, stringDBValues[i].c_str(), len);
 		}
 		else
 		{
+			//assign the length
+			len = sizeof(int);
+			DBText[offset++] = len;
+
 			int n = stoi(stringDBValues[i]);
-			memcpy(DBText + offset, &n, sizeof(n));
-			offset += sizeof(n);
+			memcpy(DBText + offset, &n, len);
 		}
+		offset += len;
 	}
 	DBLength = offset;
 
@@ -118,21 +128,22 @@ int main(int argc, char *argv[])
 			offset = 0;
 			for (int i = 0; i < 5; i++)
 			{
-				memcpy(text + offset, &serviceChannels[i], sizeof(long));
-				offset += sizeof(long);
+				//memcpy(text + offset, &serviceChannels[i], sizeof(long));
+				//offset += sizeof(long);
+				text[offset++] = serviceChannels[i];
 				memcpy(text + offset, serviceList[i].c_str(), serviceList[i].length() + 1);
 				offset += serviceList[i].length() + 1;
 			}
 			launcher->SndMsg(text, CMD_LIST, offset, launcher->m_MsgChn);
 
 			// send back the database property list next
+			// [type_1][keyword_1][type_2][keyword_2] ... [type_n][keyword_n] ; keywords are end with /0, type is of size 1 byte
 			offset = 0;
 			for (int i = 0; i < 10; i++)
 			{
-				memcpy(text + offset, &DBTypes[i], sizeof(size_t));
-				offset += sizeof(size_t);
-				len = DBKeywords[i].length() + 1;
-				memcpy(text + offset, &DBKeywords[i], len);
+				text[offset++] = DBTypes[i];
+				len = (DBKeywords[i].length() + 1) &0xFF;
+				memcpy(text + offset, DBKeywords[i].c_str(), len);
 				offset += len;
 			}
 			launcher->SndMsg(text, CMD_DATABASEINIT, offset, launcher->m_MsgChn);

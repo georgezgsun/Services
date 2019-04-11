@@ -40,7 +40,7 @@ ServiceUtils::ServiceUtils(long myServiceChannel)
 	m_TotalMessageReceived = 0;
 	m_TotalServices = 1;
 	m_TotalProperties = 0;
-	m_IndexDB = 0;
+	//m_IndexDB = 0;
 };
 
 bool ServiceUtils::StartService()
@@ -326,7 +326,7 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 	size_t j;
 	size_t n;
 	size_t offset = 0;
-	long index;
+	size_t index;
 	struct timeval tv;
 
 	do
@@ -351,6 +351,7 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 		m_MsgTS_usec = m_buf.usec;
 		size_t typ;
 		string keyword;
+		bool keywordMatched;
 
 		// no autoreply for server
 		if (m_Chn == 1)
@@ -421,34 +422,35 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 
 			do
 			{
-				memcpy(&index, m_buf.mText + offset, sizeof(index));
-				offset += sizeof(index);
-				m_ServiceChannels[m_TotalServices] = index;
+				//memcpy(&index, m_buf.mText + offset, sizeof(index));
+				//offset += sizeof(index);
+				m_ServiceChannels[m_TotalServices] = m_buf.mText[offset++];
 				m_ServiceTitles[m_TotalServices].assign(m_buf.mText + offset);
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
 			} while (offset < m_buf.len);
 			Log("Received new services list from the server. There are " + to_string(m_TotalServices) + " services in the list.", 1000);
 			break;
 
-			// auto process the database init reply from the server
-			// [type_1][keyword_1][type_2][keyword_2] ... [type_n][keyword_n] ; keywords are end with /0
+		// auto process the database init reply from the server
+		// [type_1][keyword_1][type_2][keyword_2] ... [type_n][keyword_n] ; keywords are end with /0, type is of size 1 byte
 		case CMD_DATABASEINIT:
 			offset = 0;
 			index = 0;
 
 			do
 			{
-				memcpy(&typ, m_buf.mText + offset, sizeof(typ));	// read the type
-				offset += sizeof(typ);
+				typ = m_buf.mText[offset++]; // read the type and increment offset
 				keyword.assign(m_buf.mText + offset); // read the keyword
+				offset += keyword.length() + 1;
 
 				// place the read DB keyword at the correct place of indexDB
-				m_err = 0;
+				keywordMatched = false;
 				for (i = 0; i < m_TotalProperties; i++)
 				{
 					if (keyword.compare(m_pptr[i]->keyword) == 0)
 					{
-						if (i < m_IndexDB)
+						// check if matched before
+						if (i < index)
 						{
 							m_err = -12;
 							Log("Fatal error! The keyword " + keyword + \
@@ -457,12 +459,9 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 							return true;
 						}
 
-						if (typ == m_pptr[i]->type)
-						{
-							m_pptr[i]->type = m_pptr[m_IndexDB]->type;
-							m_pptr[i]->keyword = m_pptr[m_IndexDB]->keyword;
-						}
-						else
+						// check the type matched or not
+						keywordMatched = typ == m_pptr[i]->type;
+						if (!keywordMatched)
 						{
 							m_err = -11;
 							Log("Fatal error! The data type of " + keyword + " from server is " \
@@ -476,25 +475,47 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 					}
 				}
 
-				m_TotalProperties++;
-				m_pptr[m_IndexDB] = new Property;
-				m_pptr[m_IndexDB]->type = typ;
-				m_pptr[m_IndexDB]->keyword = keyword;
-				m_IndexDB++;
-				Log("Added " + keyword + " from server with type " + to_string(typ) + " to the local keywords list.", 1000);
+				// For new property, 
+				if (!keywordMatched)
+				{
+					m_pptr[m_TotalProperties] = new Property;
+					m_pptr[m_TotalProperties]->ptr = nullptr;
+					m_TotalProperties++;
+					//Log("Added " + keyword + " from server with type " + to_string(typ) + " to the local keywords list.", 1000);
+				}
 
+				// preserve the original property before overwrite it
+				m_pptr[i]->type = m_pptr[index]->type;
+				m_pptr[i]->keyword = m_pptr[index]->keyword;
+
+				// put the property at the right place
+				m_pptr[index]->type = typ;
+				m_pptr[index]->keyword = keyword;
+				index++;
+				m_err = 0;
 			} while (offset < m_buf.len);
 			break;
 
-			// auto process the database feedback from the server
-			// [index_1][len_1][data_1][index_2][len_2][data_2] ... [index_n][len_n][data_n] ; end with index=/0
+		// auto process the database feedback from the server
+		// [index_1][len_1][data_1][index_2][len_2][data_2] ... [index_n][len_n][data_n] ; end with index=/0, index and length are of size 1 byte
 		case CMD_DATABASEQUERY:
+			offset = 0;
 			do
 			{
-				memcpy(&i, m_buf.mText + offset, sizeof(i)); // read element index
-				offset += sizeof(i);
-				memcpy(&n, m_buf.mText + offset, sizeof(n)); // read data length
-				offset += sizeof(n);
+				//memcpy(&byte, m_buf.mText + offset, 1); 
+				// read data index
+				i = m_buf.mText[offset++];
+
+				if (i >= m_TotalProperties)
+				{
+					Log("Error. Got database query result before getting any database init.", 15);
+					return true;
+				}
+
+				//memcpy(&byte, m_buf.mText + offset, 1); 
+				// read data length
+				n = m_buf.mText[offset];
+				offset++;
 				if ((offset > 255) || (n < 1))	// indicates no more data
 					break;  // break do while loop
 
