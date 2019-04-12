@@ -64,6 +64,7 @@ public:
 
 	bool dbMap(string keyword, void *p, size_t type); // assign *s to store the string queried from the database
 	bool dbMap(string keyword, string *s); // assign *s to store the string queried from the database
+	bool dbMap(string keyword, int *n); // assign *n to store the integer queried from the database
 	bool dbQuery(); // query the database. The result will be placed in variables linked to the keyword before.
 	bool dbUpdate(); // update the database with variables linked to the keyword before.
 

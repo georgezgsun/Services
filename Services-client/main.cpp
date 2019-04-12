@@ -32,8 +32,8 @@ int main()
 	string ActiveTriggers;
 	int AutoUpload;
 
-	tester->dbMap("PreEvent", &PreEvent, 1);
-	tester->dbMap("Chunk", &Chunk, 1);
+	tester->dbMap("PreEvent", &PreEvent);
+	tester->dbMap("Chunk", &Chunk);
 	tester->dbMap("CamPath", &CamPath);
 	tester->dbMap("User", &User);
 	tester->dbMap("PassWord", &Password);
@@ -41,7 +41,7 @@ int main()
 	tester->dbMap("WAP", &WAP, 1);
 	tester->dbMap("Luanguage", &Luanguage, 0);
 	tester->dbMap("Active Triggers", &ActiveTriggers, 0);
-	tester->dbMap("Auto upload", &AutoUpload, 1);
+	tester->dbMap("Auto upload", &AutoUpload);
 
 	char txt[64];
 	size_t type;

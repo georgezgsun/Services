@@ -87,8 +87,6 @@ bool ServiceUtils::StartService()
 		// read and parse the init messages sent to me
 		do
 		{
-			RcvMsg(txt, &type, &len);
-			//} while (m_TotalServices == 0);
 		} while (RcvMsg(txt, &type, &len));
 
 		// find my title from the service list, can be "" in case there is no init messages
@@ -102,7 +100,7 @@ bool ServiceUtils::StartService()
 		len += len;
 		strcpy(txt + len, m_Title.c_str());
 		len += m_Title.length() + 1;
-		return SndMsg(&txt, CMD_ONBOARD, len, 1);
+		return SndMsg(txt, CMD_ONBOARD, len, 1);
 	}
 };
 
@@ -326,7 +324,6 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 	size_t j;
 	size_t n;
 	size_t offset = 0;
-	size_t index;
 	struct timeval tv;
 
 	do
@@ -351,7 +348,6 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 		m_MsgTS_usec = m_buf.usec;
 		size_t typ;
 		string keyword;
-		bool keywordMatched;
 
 		// no autoreply for server
 		if (m_Chn == 1)
@@ -416,14 +412,12 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 			break; // continue to read next message
 
 		// auto process the services list reply from the server
-		// [index_1][title_1][index_2][title_2] ... [index_n][title_n] ; titles are end with /0
+		// [channel_1][title_1][channel_2][title_2] ... [channel_n][title_n] ; titles are end with /0. channel is of size 1 byte
 		case CMD_LIST:
 			offset = 0;
 
 			do
 			{
-				//memcpy(&index, m_buf.mText + offset, sizeof(index));
-				//offset += sizeof(index);
 				m_ServiceChannels[m_TotalServices] = m_buf.mText[offset++];
 				m_ServiceTitles[m_TotalServices].assign(m_buf.mText + offset);
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
@@ -431,34 +425,27 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 			Log("Received new services list from the server. There are " + to_string(m_TotalServices) + " services in the list.", 1000);
 			break;
 
-		// auto process the database init reply from the server
-		// [type_1][keyword_1][type_2][keyword_2] ... [type_n][keyword_n] ; keywords are end with /0, type is of size 1 byte
-		case CMD_DATABASEINIT:
+		// auto process the database feedback from the server
+		// [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
+		// end with keyword empty, type and length are of size 1 byte, keyword end with /0
+		case CMD_DATABASEQUERY:
 			offset = 0;
-			index = 0;
-
 			do
 			{
-				typ = m_buf.mText[offset++]; // read the type and increment offset
 				keyword.assign(m_buf.mText + offset); // read the keyword
-				offset += keyword.length() + 1;
+				offset += keyword.length() + 1; // there is a /0 in the end
+				if (keyword == "") // end of assignment when keyword is empty
+					break;
 
-				// place the read DB keyword at the correct place of indexDB
-				keywordMatched = false;
+				typ = m_buf.mText[offset++]; // read data type
+				n = m_buf.mText[offset++]; // read the data length
+
+				bool keywordMatched = false;
 				for (i = 0; i < m_TotalProperties; i++)
 				{
+					// check if matched before
 					if (keyword.compare(m_pptr[i]->keyword) == 0)
 					{
-						// check if matched before
-						if (i < index)
-						{
-							m_err = -12;
-							Log("Fatal error! The keyword " + keyword + \
-								" is already in the list at position " + to_string(i), \
-								- m_err);
-							return true;
-						}
-
 						// check the type matched or not
 						keywordMatched = typ == m_pptr[i]->type;
 						if (!keywordMatched)
@@ -471,66 +458,36 @@ bool ServiceUtils::RcvMsg(void *p, size_t *type, size_t *len) // receive a packe
 							return true;
 						}
 
-						break;  // beak for loop
+						break;  // break for loop
 					}
 				}
 
-				// For new property, 
+				// It is a new property if the keyword does not match any previous keywords
 				if (!keywordMatched)
 				{
+					if (m_TotalProperties >= 255)
+					{
+						Log("Error. Too many properties are added.", 15);
+						return true;
+					}
 					m_pptr[m_TotalProperties] = new Property;
 					m_pptr[m_TotalProperties]->ptr = nullptr;
+					m_pptr[m_TotalProperties]->type = typ;
+					m_pptr[m_TotalProperties]->keyword = keyword;
 					m_TotalProperties++;
-					//Log("Added " + keyword + " from server with type " + to_string(typ) + " to the local keywords list.", 1000);
 				}
 
-				// preserve the original property before overwrite it
-				m_pptr[i]->type = m_pptr[index]->type;
-				m_pptr[i]->keyword = m_pptr[index]->keyword;
-
-				// put the property at the right place
-				m_pptr[index]->type = typ;
-				m_pptr[index]->keyword = keyword;
-				index++;
-				m_err = 0;
-			} while (offset < m_buf.len);
-			break;
-
-		// auto process the database feedback from the server
-		// [index_1][len_1][data_1][index_2][len_2][data_2] ... [index_n][len_n][data_n] ; end with index=/0, index and length are of size 1 byte
-		case CMD_DATABASEQUERY:
-			offset = 0;
-			do
-			{
-				//memcpy(&byte, m_buf.mText + offset, 1); 
-				// read data index
-				i = m_buf.mText[offset++];
-
-				if (i >= m_TotalProperties)
-				{
-					Log("Error. Got database query result before getting any database init.", 15);
-					return true;
-				}
-
-				//memcpy(&byte, m_buf.mText + offset, 1); 
-				// read data length
-				n = m_buf.mText[offset];
-				offset++;
-				if ((offset > 255) || (n < 1))	// indicates no more data
-					break;  // break do while loop
-
-				m_pptr[i]->len = n;
-				if (m_pptr[i]->type == 0) // a string shall be assigned the value
-				{
-					if (!m_pptr[i]->ptr)
-						m_pptr[i]->ptr = new string;
-					static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset, n);
-				}
-				else
+				if (m_pptr[i]->type) // type 0 means a string which shall be assigned the value in a different way
 				{
 					if (!m_pptr[i]->ptr)  // make sure the pointer is not NULL before assign any value to it
 						m_pptr[i]->ptr = new char[n];
 					memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
+				}
+				else
+				{
+					if (!m_pptr[i]->ptr)
+						m_pptr[i]->ptr = new string;
+					static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset, n);
 				}
 				offset += n;
 			} while (offset < 255);
@@ -676,6 +633,12 @@ bool ServiceUtils::dbMap(string keyword, void *p, size_t type)
 bool ServiceUtils::dbMap(string keyword, string *s)
 {
 	return dbMap(keyword, s, 0);
+};
+
+// assign *n to store the string queried from the database
+bool ServiceUtils::dbMap(string keyword, int *n)
+{
+	return dbMap(keyword, n, 1);
 };
 
 // Send a request to database server to query for the value of keyword. The result will be placed in the queue by database server.

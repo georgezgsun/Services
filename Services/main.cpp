@@ -25,24 +25,23 @@ int main(int argc, char *argv[])
 	string msg;
 	string tmp;
 
-	string serviceList[5] = { "SERVER", "GPS", "Radar", "Trigger", "FrontCam" };
+	string serviceTitles[5] = { "SERVER", "GPS", "Radar", "Trigger", "FrontCam" };
 	char serviceChannels[5] = { 1,3,4,5,19 };
+	char serviceListBuf[255]; // store the service list
+	size_t lengthServiceListBuf = 0;
+
 	string DBKeywords[10] = { "PreEvent", "Chunk", "CamPath", "User", "PassWord", "Cloud Server", "WAP", "Luanguage", "Active Triggers", "Auto upload" };
 	char  DBTypes[10] = { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
-	string stringDBValues[10] = { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24,54,54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
+	string stringDBValues[10] = { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24.54.54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
+	char DBQueryBuf[255]; // store database query result
+	size_t lengthDBQueryBuf = 0;
+
+	char DBQueryBuf2[255]; // store database query result
+	size_t lengthDBQueryBuf2 = 0;
+
 	long watchdogs[5] = { 0, 0, 0, 0, 0 };
 
-	ServiceUtils *launcher = new ServiceUtils(1);
-	if (!launcher->StartService())
-	{
-		cerr << endl << "Cannot launch the headquater." << endl;
-		return -1;
-	}
-	cout << endl << "Server starts. Waiting for clients to join...." << endl;
-
 	char text[255];
-	char DBText[255]; // store database keywords and element type
-	size_t DBLength = 0;
 	size_t type;
 	size_t len = 0;
 	size_t offset = 0;
@@ -53,35 +52,61 @@ int main(int argc, char *argv[])
 	string logContent;
 	struct timeval tv;
 
-	// Prepare the database query results. This is a simulation.
-	// [index_1][len_1][data_1][index_2][len_2][data_2] ... [index_n][len_n][data_n] ; end with index=/0, index and length are of size 1 byte
-	for (size_t i = 0; i < 10; i++)
+	// Prepare the service list. This is a simulation.
+	// [channel_1][title_1][channel_2][title_2] ... [channel_n][title_n] ; titles are end with /0. channel is of size 1 byte
+	for (int i = 0; i < 5; i++)
 	{
-		// assign the index
-		DBText[offset++] = i & 0xFF;
+		serviceListBuf[offset++] = serviceChannels[i];
+		strcpy(serviceListBuf + offset, serviceTitles[i].c_str());
+		offset += serviceTitles[i].length() + 1;
+	}
+	lengthServiceListBuf = offset;
 
-		// assign the value
-		if (DBTypes[i] == 0)
+	// Prepare the database query results. This is a simulation.
+	// [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
+	// end with keyword empty, type and length are of size 1 byte, keyword end with /0
+	offset = 0;
+	for (int i = 0; i < 10; i++)
+	{
+		// assign the keywords first
+		strcpy(DBQueryBuf + offset, DBKeywords[i].c_str());
+		offset += DBKeywords[i].length() + 1;
+
+		// assign the type
+		DBQueryBuf[offset++] = DBTypes[i];
+
+		// string value is assigned differently, there is a /0 at the end
+		if (DBTypes[i])
 		{
-			len = stringDBValues[i].length() + 1;
-			//assign the length
-			DBText[offset++] = len & 0xFF;
-
-			// string value is assigned differently, there is a /0 at the end
-			memcpy(DBText + offset, stringDBValues[i].c_str(), len);
+			len = sizeof(int);
+			DBQueryBuf[offset++] = len & 0xFF;
+			int t = stoi(stringDBValues[i]);
+			memcpy(DBQueryBuf + offset, &t, sizeof(int));
 		}
 		else
 		{
-			//assign the length
-			len = sizeof(int);
-			DBText[offset++] = len;
-
-			int n = stoi(stringDBValues[i]);
-			memcpy(DBText + offset, &n, len);
+			len = stringDBValues[i].length() + 1;
+			DBQueryBuf[offset++] = len & 0xFF;
+			strcpy(DBQueryBuf + offset, stringDBValues[i].c_str());
 		}
 		offset += len;
 	}
-	DBLength = offset;
+	DBQueryBuf[offset] = 0;
+	lengthDBQueryBuf = offset;
+
+	lengthDBQueryBuf2 = lengthDBQueryBuf;
+	memcpy(DBQueryBuf2, DBQueryBuf, lengthDBQueryBuf);
+	for (size_t i = 0; i < lengthDBQueryBuf2; i++)
+		if (DBQueryBuf2[i] == 'v')
+			DBQueryBuf2[i] = 'x';
+
+	ServiceUtils *launcher = new ServiceUtils(1);
+	if (!launcher->StartService())
+	{
+		cerr << endl << "Cannot launch the headquater." << endl;
+		return -1;
+	}
+	cout << endl << "Server starts. Waiting for clients to join...." << endl;
 
 	// Simulate the server/head working
 	while (1)
@@ -122,34 +147,12 @@ int main(int argc, char *argv[])
 			if (sTitle != "")
 				break;
 
-			//sTitle = to_string(launcher->m_MsgChn);
-
 			// send back the service list first
-			offset = 0;
-			for (int i = 0; i < 5; i++)
-			{
-				//memcpy(text + offset, &serviceChannels[i], sizeof(long));
-				//offset += sizeof(long);
-				text[offset++] = serviceChannels[i];
-				memcpy(text + offset, serviceList[i].c_str(), serviceList[i].length() + 1);
-				offset += serviceList[i].length() + 1;
-			}
-			launcher->SndMsg(text, CMD_LIST, offset, launcher->m_MsgChn);
-
-			// send back the database property list next
-			// [type_1][keyword_1][type_2][keyword_2] ... [type_n][keyword_n] ; keywords are end with /0, type is of size 1 byte
-			offset = 0;
-			for (int i = 0; i < 10; i++)
-			{
-				text[offset++] = DBTypes[i];
-				len = (DBKeywords[i].length() + 1) &0xFF;
-				memcpy(text + offset, DBKeywords[i].c_str(), len);
-				offset += len;
-			}
-			launcher->SndMsg(text, CMD_DATABASEINIT, offset, launcher->m_MsgChn);
+			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
 
 			// send back the database properties at the end
-			launcher->SndMsg(DBText, CMD_DATABASEQUERY, DBLength, launcher->m_MsgChn);
+			launcher->SndMsg(DBQueryBuf, CMD_DATABASEQUERY, lengthDBQueryBuf, launcher->m_MsgChn);
+			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
 			break;
 
 		case CMD_LOG:
@@ -166,7 +169,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case CMD_DATABASEQUERY:
-			launcher->SndMsg(DBText, CMD_DATABASEQUERY, DBLength, sTitle);
+			launcher->SndMsg(DBQueryBuf, CMD_DATABASEQUERY, lengthDBQueryBuf, sTitle);
 			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp \
 				<< ". Reply the latest database select result." << endl;
 			break;
