@@ -152,7 +152,7 @@ int main(int argc, char *argv[])
 
 			// send back the database properties at the end
 			launcher->SndMsg(DBQueryBuf, CMD_DATABASEQUERY, lengthDBQueryBuf, launcher->m_MsgChn);
-			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
+			//launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
 			break;
 
 		case CMD_LOG:
@@ -169,7 +169,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case CMD_DATABASEQUERY:
-			launcher->SndMsg(DBQueryBuf, CMD_DATABASEQUERY, lengthDBQueryBuf, sTitle);
+			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, sTitle);
 			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp \
 				<< ". Reply the latest database select result." << endl;
 			break;

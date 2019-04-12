@@ -22,6 +22,7 @@ int main()
 	//  { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
 	//  { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24,54,54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
 	int PreEvent;
+	int PreEvent2;
 	int Chunk;
 	string CamPath;
 	string User;
@@ -33,6 +34,7 @@ int main()
 	int AutoUpload;
 
 	tester->dbMap("PreEvent", &PreEvent);
+	tester->dbMap("PreExent", &PreEvent2);
 	tester->dbMap("Chunk", &Chunk);
 	tester->dbMap("CamPath", &CamPath);
 	tester->dbMap("User", &User);
@@ -59,6 +61,8 @@ int main()
 		{
 			cout << datetime << " : Received messages of type " << type << " of length " << len << " from " << tester->m_MsgChn << endl;
 		}
+
+
 	}
 
 	//struct timeval tv;
