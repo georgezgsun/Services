@@ -8,9 +8,9 @@
 
 using namespace std;
 
-int main()
+int main(int argc, char *argv[])
 {
-	ServiceUtils *tester = new ServiceUtils(3);
+	ServiceUtils *tester = new ServiceUtils(argc, argv);
 	if (!tester->StartService())
 	{
 		cerr << endl << "Cannot launch the tester. Error=" << tester->m_err << endl;
@@ -21,7 +21,7 @@ int main()
 	//	{ "PreEvent", "Chunk", "CamPath", "User", "PassWord", "Cloud Server", "WAP", "Luanguage", "Active Triggers", "Auto upload" };
 	//  { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
 	//  { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24,54,54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
-	int PreEvent;
+	int PreEvent = 0;
 	int PreEvent2;
 	int Chunk;
 	string CamPath;
@@ -40,31 +40,51 @@ int main()
 	tester->dbMap("User", &User);
 	tester->dbMap("PassWord", &Password);
 	tester->dbMap("Cloud Server", &CloudServer, 0);
-	tester->dbMap("WAP", &WAP, 1);
+	tester->dbMap("WAP", &WAP, 4);
 	tester->dbMap("Luanguage", &Luanguage, 0);
 	tester->dbMap("Active Triggers", &ActiveTriggers, 0);
 	tester->dbMap("Auto upload", &AutoUpload);
 
 	char txt[64];
-	size_t type;
+	size_t typeMsg;
 	size_t len;
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
+	int lastPreEvent = 1;
+
+	string msg;
 	while (true)
 	{
 		gettimeofday(&tv, nullptr);
 		nowtm = localtime(&tv.tv_sec);
 		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
-		if (tester->RcvMsg(txt, &type, &len))
+		typeMsg = tester->RcvMsg();
+		if (typeMsg)
 		{
-			cout << datetime << " : Received messages of type " << type << " of length " << len << " from " << tester->m_MsgChn << endl;
+			msg = tester->GetRcvMsg();
+			cout << datetime << " : Received messages '" << msg << "' of type " << typeMsg << " from " << tester->m_MsgChn << endl;
 		}
 
+		if (lastPreEvent != PreEvent)
+		{
+			cout << datetime << ":\n";
+			cout << "PreEvent is " << PreEvent << " now\n";
+			cout << "Chunk is " << Chunk << " now\n";
+			cout << "User is " << User << " now\n";
+			cout << "Password is " << Password << " now\n";
+			cout << "Cloud Server is " << WAP << " now\n";
+			cout << "WAP is " << PreEvent << " now\n";
+			cout << "Luanguage is " << Luanguage << " now\n";
+			cout << "Active Triggers are " << ActiveTriggers << " now\n";
+			cout << "Auto Upload is " << AutoUpload << " now\n";
+			cout << "PreExent is " << PreEvent2 << " now\n";
+
+			lastPreEvent = PreEvent;
+		}
 
 	}
-
 	//struct timeval tv;
 	//time_t nowtime;
 	//struct tm *nowtm;

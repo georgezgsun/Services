@@ -39,11 +39,10 @@ int main(int argc, char *argv[])
 	char DBQueryBuf2[255]; // store database query result
 	size_t lengthDBQueryBuf2 = 0;
 
-	long watchdogs[5] = { 0, 0, 0, 0, 0 };
-
 	char text[255];
-	size_t type;
+	size_t typeMsg;
 	size_t len = 0;
+	size_t chn = 0;
 	size_t offset = 0;
 	pid_t pid;
 	pid_t ppid;
@@ -63,8 +62,8 @@ int main(int argc, char *argv[])
 	lengthServiceListBuf = offset;
 
 	// Prepare the database query results. This is a simulation.
-	// [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
-	// end with keyword empty, type and length are of size 1 byte, keyword end with /0
+	// [keyword_1][len_1][data_1][keyword_2][len_2][data_2] ... [keyword_n][len_n][data_n] ; end with keyword empty.
+	// len is of size 1 byte, 0 represents for string. keyword end with /0
 	offset = 0;
 	for (int i = 0; i < 10; i++)
 	{
@@ -72,24 +71,22 @@ int main(int argc, char *argv[])
 		strcpy(DBQueryBuf + offset, DBKeywords[i].c_str());
 		offset += DBKeywords[i].length() + 1;
 
-		// assign the type
-		DBQueryBuf[offset++] = DBTypes[i];
 
 		// string value is assigned differently, there is a /0 at the end
 		if (DBTypes[i])
 		{
-			len = sizeof(int);
-			DBQueryBuf[offset++] = len & 0xFF;
+			DBQueryBuf[offset++] = sizeof(int);
 			int t = stoi(stringDBValues[i]);
 			memcpy(DBQueryBuf + offset, &t, sizeof(int));
+			offset += sizeof(int);
 		}
 		else
 		{
-			len = stringDBValues[i].length() + 1;
-			DBQueryBuf[offset++] = len & 0xFF;
+			DBQueryBuf[offset++] = 0;
 			strcpy(DBQueryBuf + offset, stringDBValues[i].c_str());
+			offset += stringDBValues[i].length() + 1;
+
 		}
-		offset += len;
 	}
 	DBQueryBuf[offset] = 0;
 	lengthDBQueryBuf = offset;
@@ -100,7 +97,7 @@ int main(int argc, char *argv[])
 		if (DBQueryBuf2[i] == 'v')
 			DBQueryBuf2[i] = 'x';
 
-	ServiceUtils *launcher = new ServiceUtils(1);
+	ServiceUtils *launcher = new ServiceUtils(0, argv);
 	if (!launcher->StartService())
 	{
 		cerr << endl << "Cannot launch the headquater." << endl;
@@ -114,23 +111,24 @@ int main(int argc, char *argv[])
 		gettimeofday(&tv, nullptr);
 
 		// check the watch dog
-		for (int i = 0; i < 5; i++)
-			if (watchdogs[i] && (tv.tv_sec > watchdogs[i]))
-			{
-				cout << getDateTime(tv.tv_sec, tv.tv_usec) << " : Warning. Watcgdog " << i << " alert at " << tv.tv_sec << "." << tv.tv_usec << endl;
-				watchdogs[i] = tv.tv_sec + 5;
-			}
+		//chn = launcher->WatchdogFeed();
+		if (chn)
+		{
+			cout << getDateTime(tv.tv_sec, tv.tv_usec) << " : Warning. Watcgdog " << chn << " alert at " << tv.tv_sec << "." << tv.tv_usec << endl;
+		}
 
 		// check if there is any new message sent to server. These messages are not auto processed by the library.
-		if (!launcher->RcvMsg(&text, &type, &len))
+		typeMsg = launcher->RcvMsg();
+		if (!typeMsg)
 			continue;
+		len = launcher->GetRcvMsgBuf(text);
 
 		tmp = getDateTime(tv.tv_sec, tv.tv_usec);
 		cout << tmp << " : ";
 
 		tmp = getDateTime(launcher->m_MsgTS_sec, launcher->m_MsgTS_usec);
 		// process those messages sent to server
-		switch (type)
+		switch (typeMsg)
 		{
 		case CMD_ONBOARD:
 			offset = 0;
@@ -142,10 +140,6 @@ int main(int argc, char *argv[])
 
 			cout << "Service provider " << sTitle << " gets onboard at " << tmp \
 				<< " on channel " << launcher->m_MsgChn << " with PID=" << pid << ", Parent PID=" << ppid << endl;
-
-			// check if the onboard client has already received init messages
-			if (sTitle != "")
-				break;
 
 			// send back the service list first
 			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
@@ -162,12 +156,6 @@ int main(int argc, char *argv[])
 			cout << "LOG from channel " << launcher->m_MsgChn << " at " << tmp << ", [" << logType << "] " << logContent << endl;
 			break;
 
-		case CMD_WATCHDOG:
-			watchdogs[0] = launcher->m_MsgTS_sec + 5;
-			cout << "Get FeedWatchdog notice from channel " << launcher->m_MsgChn << " at " << tmp \
-				<< ". Watch dog will be alert in 5s." << endl;
-			break;
-
 		case CMD_DATABASEQUERY:
 			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, sTitle);
 			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp \
@@ -176,12 +164,12 @@ int main(int argc, char *argv[])
 
 		case 0:
 			msg.assign(text);
-			cout << "Got a message of string " << msg << " from " << launcher->m_MsgChn << " at " << tmp << endl;
+			cout << "Got a message of string '" << msg << "' from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		default:
-			cout << "Got message from " << launcher->m_MsgChn << " at " << tmp \
-				<< " with type of " << type << " and length of " << len << endl;
+			cout << "Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn << " at " << tmp \
+				<< " with type of " << typeMsg << " and length of " << len << endl;
 		}
 	}
 

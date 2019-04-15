@@ -5,25 +5,25 @@
 
 #include <string>
 
-#define CMD_ONBOARD 33
-#define CMD_LIST 33
-#define CMD_DATABASEINIT 34
-#define CMD_DATABASEUPDATE 34
-#define CMD_DATABASEQUERY 35
-#define CMD_LOG 36
-#define CMD_WATCHDOG 37
-#define CMD_DOWN 37
-#define CMD_STOP 38
-#define CMD_SUBSCRIBE 39
-#define CMD_QUERY 40
+#define CMD_ONBOARD 1
+#define CMD_LIST 2
+#define CMD_DATABASEUPDATE 3
+#define CMD_DATABASEQUERY 4
+#define CMD_LOG 5
+#define CMD_WATCHDOG 6
+#define CMD_DOWN 7
+#define CMD_STOP 8
+#define CMD_SUBSCRIBE 9
+#define CMD_QUERY 10
+#define CMD_STRING 32
+#define CMD_INTEGER 33
 using namespace std;
 
 // structure that defines properties, used to retrieve properties from database
 struct Property
 {
 	string keyword;// keyword of this property, shall match with those in database
-	size_t type;  // type of this property, first bit 0 indicates string, 1 indicates interger. Any value lower than 32 is of defined structure. 
-	size_t len;  // the lenth of the storage of the property
+	size_t len;  // length of this property, 0 indicates string. 
 	void *ptr; // pointer to the real storage of the property
 };
 
@@ -43,23 +43,24 @@ class ServiceUtils
 {
 
 public:
-	ServiceUtils(long myServiceChannel); // Define specified message queue
+	ServiceUtils(int argc, char *argv[]); // Define specified message queue
 
 	bool StartService(); // Open the message queue and specify the property of this module, the properties will be auto updated later
 	long GetServiceChannel(string ServiceTitle); // Get the corresponding service type to ServiceTitle, return 0 for not found
 	string GetServiceTitle(long ServiceChannel); // Get the corresponding service title to ServiceType, return "" for not found
 
 	bool SubscribeService(string ServiceTitle); // Subscribe a service by its title
-	bool QueryServiceData(string ServiceTitle); // Ask for service data from specified service provider
+	bool ServiceQuery(string ServiceTitle); // Ask for service data from specified service provider
 	bool SndMsg(string msg, string ServiceTitle); // Send a string to specified service provider
 	bool SndMsg(void *p, size_t type, size_t len, long ServiceChannel); // Send a packet with given length to specified service provider with channel
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
 	bool BroadcastUpdate(void *p, size_t type, size_t len); // broadcast the data stored at *p with dataLength and send it to every subscriber
 
-	string RcvMsg(); // receive a text message from sspecified ervice provider, like GPS, RADAR, TRIGGER. Not Autoreply.
-	bool RcvMsg(void *p, size_t *type, size_t *len); // receive a packet from specified service provider. Autoreply all requests when enabled.
+	size_t RcvMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
+	string GetRcvMsg(); // receive a text message from sspecified ervice provider, like GPS, RADAR, TRIGGER. Not Autoreply.
+	size_t GetRcvMsgBuf(void *p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
-	bool FeedWatchDog(); // Feed the dog at watchdog server
+	size_t WatchdogFeed(); // Feed the dog at watchdog server
 	bool Log(string logContent, long logType); // Send a log to log server
 
 	bool dbMap(string keyword, void *p, size_t type); // assign *s to store the string queried from the database
@@ -98,6 +99,8 @@ protected:
 	long m_TotalMessageReceived;
 
 	Property *m_pptr[255]; // Pointer to the Properties of theis module
+
+	long m_WatchdogTimer[255];  // Store the watchdog timers
 
 	// return the index of the key in database
 	size_t getIndex(string key);
