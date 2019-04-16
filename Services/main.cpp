@@ -111,10 +111,10 @@ int main(int argc, char *argv[])
 		gettimeofday(&tv, nullptr);
 
 		// check the watch dog
-		//chn = launcher->WatchdogFeed();
+		chn = launcher->WatchdogFeed();
 		if (chn)
 		{
-			cout << getDateTime(tv.tv_sec, tv.tv_usec) << " : Warning. Watcgdog " << chn << " alert at " << tv.tv_sec << "." << tv.tv_usec << endl;
+			cout << getDateTime(tv.tv_sec, tv.tv_usec) << " : Warning. Watchdog " << chn << " alerts at " << getDateTime(tv.tv_sec,tv.tv_usec) << endl;
 		}
 
 		// check if there is any new message sent to server. These messages are not auto processed by the library.
@@ -138,38 +138,40 @@ int main(int argc, char *argv[])
 			offset += sizeof(ppid);
 			sTitle.assign(text + offset);
 
-			cout << "Service provider " << sTitle << " gets onboard at " << tmp \
-				<< " on channel " << launcher->m_MsgChn << " with PID=" << pid << ", Parent PID=" << ppid << endl;
+			cout << "Service provider " << sTitle << " gets onboard on channel " << launcher->m_MsgChn << " with PID=" << pid 
+				<< ", Parent PID=" << ppid << " at " << tmp << endl;
 
 			// send back the service list first
 			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
 
 			// send back the database properties at the end
 			launcher->SndMsg(DBQueryBuf, CMD_DATABASEQUERY, lengthDBQueryBuf, launcher->m_MsgChn);
-			//launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
+			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
 			break;
 
 		case CMD_LOG:
 			offset = 0;
 			memcpy(&logType, text, sizeof(logType));
 			logContent.assign(text + sizeof(logType));
-			cout << "LOG from channel " << launcher->m_MsgChn << " at " << tmp << ", [" << logType << "] " << logContent << endl;
+			cout << "LOG from channel " << launcher->m_MsgChn << ", [" << logType << "] " << logContent << " at " << tmp << endl;
 			break;
 
 		case CMD_DATABASEQUERY:
-			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, sTitle);
-			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp \
-				<< ". Reply the latest database select result." << endl;
+			launcher->SndMsg(DBQueryBuf2, CMD_DATABASEQUERY, lengthDBQueryBuf2, launcher->m_MsgChn);
+			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
-		case 0:
-			msg.assign(text);
-			cout << "Got a message of string '" << msg << "' from " << launcher->m_MsgChn << " at " << tmp << endl;
+		case CMD_WATCHDOG:
+			cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
+			break;
+
+		case CMD_STRING:
+			cout << "Got a message of string '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		default:
-			cout << "Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn << " at " << tmp \
-				<< " with type of " << typeMsg << " and length of " << len << endl;
+			cout << "Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn \
+				<< " with type of " << typeMsg << " and length of " << len << " at " << tmp << endl;
 		}
 	}
 

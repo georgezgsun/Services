@@ -102,9 +102,6 @@ protected:
 
 	long m_WatchdogTimer[255];  // Store the watchdog timers
 
-	// return the index of the key in database
-	size_t getIndex(string key);
-
 private:
 	string m_Title;  // The title of this channel
 	size_t m_HeaderLength;  // The header length of message
