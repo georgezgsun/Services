@@ -285,10 +285,89 @@ bool ServiceUtils::SendServiceSubscription(string ServiceTitle)
 	return true;
 };
 
-// query service data from the provider channel
+// send the request for query service data from the provider channel
 bool ServiceUtils::SendServiceQuery(string ServiceTitle)
 {
-	return SndMsg(nullptr, CMD_QUERY, 0, ServiceTitle);
+	if (m_ID == -1)
+	{
+		m_err = -1;  // Message queue has not been opened
+		return false;
+	}
+
+	long Chn = GetServiceChannel(ServiceTitle);
+	if (!Chn)
+	{
+		printf("(Debug) Cannot find %s in the service list.", ServiceTitle.c_str());
+		m_err = -2;
+		return false;
+	}
+
+	// It is a normal query send for clients.
+	if (m_Chn > 1)
+		return SndMsg(nullptr, CMD_QUERY, 0, Chn);
+
+	// Reply the database query results to the client
+	struct timeval tv;
+	gettimeofday(&tv, nullptr);
+	m_buf.rChn = Chn;
+	m_buf.sChn = m_Chn;
+	m_buf.sec = tv.tv_sec;
+	m_buf.usec = tv.tv_usec;
+	m_buf.len = 0; // temporal assigned to 0
+	m_buf.type = CMD_DATABASEQUERY;
+
+	size_t offset = 0;
+	for (size_t i = 0; i < m_TotalProperties; i++)
+	{
+		size_t len = m_pptr[i]->keyword.length() + 2;
+		len += m_pptr[i]->len ? m_pptr[i]->len : static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+
+		// send the message if the buffer is full
+		if (offset + len > 255)
+		{
+			m_buf.len = offset;
+			if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT))
+			{
+				m_err = errno;
+				return false;
+			};
+
+			m_TotalMessageSent++;
+			offset = 0;
+			m_err = 0;
+		}
+
+		// assign the keyword of the property
+		strcpy(m_buf.mText + offset, m_pptr[i]->keyword.c_str());
+		offset += m_pptr[i]->keyword.length() + 1;
+
+		//assign the length of the property
+		len = m_pptr[i]->len;
+		m_buf.mText[offset++] = m_pptr[i]->len & 0xFF;
+
+		// assign the value of the property
+		if (len)
+		{
+			memcpy(m_buf.mText + offset, m_pptr[i]->ptr, len);
+			offset += len;
+		}
+		else
+		{
+			// A string is different from normal
+			strcpy(m_buf.mText + offset, static_cast<string *>(m_pptr[i]->ptr)->c_str());
+			offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+		}
+	}
+
+	m_buf.len = offset;
+	if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT) == 0)
+	{
+		m_err = 0;
+		m_TotalMessageSent++;
+		return true;
+	}
+	m_err = errno;
+	return false;
 }
 
 // broadcast the service data to all clients
@@ -390,6 +469,58 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 			//printf("(Debug) Watchdog timer %d updates to %ld.\n", m_MsgChn, m_WatchdogTimer[m_MsgChn]);
 			if (m_buf.type == CMD_ONBOARD)  // keep record for those onboard services in the server
 				m_ServiceChannels[m_TotalServices++] = m_buf.sChn;
+
+			if (m_buf.type != CMD_DATABASEUPDATE)
+				return m_buf.type;
+
+			// map the updated data from clients to local variables
+			offset = 0;
+			do
+			{
+				keyword.assign(m_buf.mText + offset); // read the keyword
+				offset += keyword.length() + 1; // there is a /0 in the end
+				if (keyword == "") // end of assignment when keyword is empty
+					return m_buf.type; 
+
+				n = m_buf.mText[offset++]; // read data length, 0 represents for string
+				bool keywordMatched = false;
+				for (i = 0; i < m_TotalProperties; i++)
+				{
+					// check if the keyword matched
+					if (keyword.compare(m_pptr[i]->keyword) == 0)
+					{
+						// check the len/type matched or not
+						if (n != m_pptr[i]->len)
+						{
+							m_err = -121;
+							printf("Error! %s from channel %d has length of %d, locals is of %d.\n", 
+								m_pptr[i]->keyword.c_str(), m_MsgChn, n, m_pptr[i]->len);
+							return m_buf.type;
+						}
+
+						// type 0 means a string which shall be assigned the value in a different way
+						if (m_pptr[i]->len)
+						{
+							memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
+							offset += n;
+						}
+						else
+						{
+							static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
+							offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+						}
+						keywordMatched = true;
+						break;  // break for loop
+					}
+				}
+
+				if (!keywordMatched)
+				{
+					m_err = -120;
+					printf("Error! %s from channel %d does not any keywords in the database.", m_pptr[i]->keyword.c_str(), m_MsgChn);
+				}
+			} while (offset < 255);
+
 			return m_buf.type;
 		}
 
@@ -754,6 +885,7 @@ bool ServiceUtils::dbUpdate()
 		// send the message if the buffer is full
 		if (offset + len > 255)
 		{
+			m_buf.len = offset;
 			if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT))
 			{
 				m_err = errno;
@@ -774,10 +906,20 @@ bool ServiceUtils::dbUpdate()
 		m_buf.mText[offset++] = m_pptr[i]->len & 0xFF;
 		
 		// assign the value of the property
-		memcpy(m_buf.mText + offset, m_pptr[i]->ptr, len);
-		offset += len;
+		if (len)
+		{
+			memcpy(m_buf.mText + offset, m_pptr[i]->ptr, len);
+			offset += len;
+		}
+		else
+		{
+			// A string is different from normal
+			strcpy(m_buf.mText + offset, static_cast<string *>(m_pptr[i]->ptr)->c_str());
+			offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+		}
 	}
 
+	m_buf.len = offset;
 	if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT) == 0)
 	{
 		m_err = 0;

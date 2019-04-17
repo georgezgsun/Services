@@ -99,6 +99,9 @@ int main(int argc, char *argv[])
 			{
 			case 4:
 				PreEvent = 60;
+				Chunk = 30;
+				ActiveTriggers = "MIC";
+				tester->dbUpdate();
 				break;
 
 			case 3:
@@ -107,6 +110,8 @@ int main(int argc, char *argv[])
 
 			case 2:
 				PreEvent = 30;
+				Chunk = 20;
+				ActiveTriggers = "BRK";
 				break;
 
 			case 1:
