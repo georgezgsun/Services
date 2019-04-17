@@ -49,21 +49,21 @@ public:
 	long GetServiceChannel(string ServiceTitle); // Get the corresponding service type to ServiceTitle, return 0 for not found
 	string GetServiceTitle(long ServiceChannel); // Get the corresponding service title to ServiceType, return "" for not found
 
-	bool SubscribeService(string ServiceTitle); // Subscribe a service by its title
-	bool ServiceQuery(string ServiceTitle); // Ask for service data from specified service provider
+	bool SendServiceSubscription(string ServiceTitle); // Subscribe a service by its title
+	bool SendServiceQuery(string ServiceTitle); // Ask for service data from specified service provider
 	bool SndMsg(string msg, string ServiceTitle); // Send a string to specified service provider
 	bool SndMsg(void *p, size_t type, size_t len, long ServiceChannel); // Send a packet with given length to specified service provider with channel
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
-	bool BroadcastUpdate(void *p, size_t type, size_t len); // broadcast the data stored at *p with dataLength and send it to every subscriber
+	bool BroadcastServiceDataUpdate(void *p, size_t type, size_t len); // broadcast the data stored at *p with dataLength and send it to every subscriber
 
-	size_t RcvMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
+	size_t ChkNewMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
 	string GetRcvMsg(); // receive a text message from sspecified ervice provider, like GPS, RADAR, TRIGGER. Not Autoreply.
-	size_t GetRcvMsgBuf(void *p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
+	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
 	size_t WatchdogFeed(); // Feed the dog at watchdog server
 	bool Log(string logContent, long logType); // Send a log to log server
 
-	bool dbMap(string keyword, void *p, size_t type); // assign *s to store the string queried from the database
+	bool dbMap(string keyword, void *p, size_t len); // assign *p to store the variable queried from the database with length len, len=0 for string
 	bool dbMap(string keyword, string *s); // assign *s to store the string queried from the database
 	bool dbMap(string keyword, int *n); // assign *n to store the integer queried from the database
 	bool dbQuery(); // query the database. The result will be placed in variables linked to the keyword before.

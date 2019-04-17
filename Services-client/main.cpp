@@ -46,9 +46,7 @@ int main(int argc, char *argv[])
 	}
 	tester->SndMsg("Hello from a client.", "1");
 
-	char txt[64];
 	size_t typeMsg;
-	size_t len;
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
@@ -62,7 +60,7 @@ int main(int argc, char *argv[])
 		nowtm = localtime(&tv.tv_sec);
 		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
-		typeMsg = tester->RcvMsg();
+		typeMsg = tester->ChkNewMsg();
 		if (typeMsg)
 		{
 			msg = tester->GetRcvMsg();

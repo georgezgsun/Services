@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
 	char DBQueryBuf2[255]; // store database query result
 	size_t lengthDBQueryBuf2 = 0;
 
-	char text[255];
+	char *bufMsg;
 	size_t typeMsg;
 	size_t len = 0;
 	size_t chn = 0;
@@ -50,6 +50,18 @@ int main(int argc, char *argv[])
 	long logType;
 	string logContent;
 	struct timeval tv;
+
+	int PreEvent = 0;
+	int PreEvent2;
+	int Chunk;
+	string CamPath;
+	string User;
+	string Password;
+	string CloudServer;
+	int WAP;
+	string Luanguage;
+	string ActiveTriggers;
+	int AutoUpload;
 
 	// Prepare the service list. This is a simulation.
 	// [channel_1][title_1][channel_2][title_2] ... [channel_n][title_n] ; titles are end with /0. channel is of size 1 byte
@@ -105,6 +117,18 @@ int main(int argc, char *argv[])
 	}
 	cout << endl << "Server starts. Waiting for clients to join...." << endl;
 
+	launcher->dbMap("PreEvent", &PreEvent);
+	launcher->dbMap("PreExent", &PreEvent2);
+	launcher->dbMap("Chunk", &Chunk);
+	launcher->dbMap("CamPath", &CamPath);
+	launcher->dbMap("User", &User);
+	launcher->dbMap("PassWord", &Password);
+	launcher->dbMap("Cloud Server", &CloudServer, 0);
+	launcher->dbMap("WAP", &WAP, 4);
+	launcher->dbMap("Luanguage", &Luanguage, 0);
+	launcher->dbMap("Active Triggers", &ActiveTriggers, 0);
+	launcher->dbMap("Auto upload", &AutoUpload);
+
 	// Simulate the server/head working
 	while (1)
 	{
@@ -118,10 +142,11 @@ int main(int argc, char *argv[])
 		}
 
 		// check if there is any new message sent to server. These messages are not auto processed by the library.
-		typeMsg = launcher->RcvMsg();
+		typeMsg = launcher->ChkNewMsg();
 		if (!typeMsg)
 			continue;
-		len = launcher->GetRcvMsgBuf(text);
+		len = launcher->GetRcvMsgBuf(&bufMsg);
+		//memcpy(bufMsg, p, len);
 
 		tmp = getDateTime(tv.tv_sec, tv.tv_usec);
 		cout << tmp << " : ";
@@ -132,11 +157,11 @@ int main(int argc, char *argv[])
 		{
 		case CMD_ONBOARD:
 			offset = 0;
-			memcpy(&pid, text + offset, sizeof(pid));
+			memcpy(&pid, bufMsg + offset, sizeof(pid));
 			offset += sizeof(pid);
-			memcpy(&ppid, text + offset, sizeof(ppid));
+			memcpy(&ppid, bufMsg + offset, sizeof(ppid));
 			offset += sizeof(ppid);
-			sTitle.assign(text + offset);
+			sTitle.assign(bufMsg + offset);
 
 			cout << "Service provider " << sTitle << " gets onboard on channel " << launcher->m_MsgChn << " with PID=" << pid 
 				<< ", Parent PID=" << ppid << " at " << tmp << endl;
@@ -151,8 +176,8 @@ int main(int argc, char *argv[])
 
 		case CMD_LOG:
 			offset = 0;
-			memcpy(&logType, text, sizeof(logType));
-			logContent.assign(text + sizeof(logType));
+			memcpy(&logType, bufMsg, sizeof(logType));
+			logContent.assign(bufMsg + sizeof(logType));
 			cout << "LOG from channel " << launcher->m_MsgChn << ", [" << logType << "] " << logContent << " at " << tmp << endl;
 			break;
 
