@@ -8,24 +8,34 @@
 
 using namespace std;
 
+// tester on services utils
+// 1. Test the setup of message queue on both commander and client
+// 2. Test the startup procedure on both commander and client so that they can talk and the initialization is correct
+// 3. Test the dbMap function on both commander and client so that the keywords from the database may map local variable
+// 4. Test message send from a client can be received in commander correctly
+// 5. Test the watchdog function works on both commander and client
+// 6. Test database query and update data transfer is correct between commander and client
+
+// TODO
+// 1. Test the service subscription and query
+// 2. Test the auto re-subscription after the service provider is back
+//
+
 int main(int argc, char *argv[])
 {
 	ServiceUtils *tester = new ServiceUtils(argc, argv);
 
-	//	{ "PreEvent", "Chunk", "CamPath", "User", "PassWord", "Cloud Server", "WAP", "Luanguage", "Active Triggers", "Auto upload" };
-	//  { 1, 1, 0, 0, 0, 0, 1, 0, 0, 1 }; // 1 for int, 0 for string
-	//  { "120", "60", "rtsp://10.25.20.0/1/h264major", "Mark Richman", "noPassword", "50.24.54.54", "1", "English", "FLB SRN MIC LSB RLB", "1" };
-	int PreEvent = 0;
+	int PreEvent, lastPreEvent;
 	int PreEvent2;
-	int Chunk;
-	string CamPath;
-	string User;
-	string Password;
-	string CloudServer;
-	int WAP;
-	string Luanguage;
-	string ActiveTriggers;
-	int AutoUpload;
+	int Chunk, lastChunk;
+	string CamPath, lastCamPath;
+	string User, lastUser;
+	string Password, lastPassword;
+	string CloudServer, lastCloudServer;
+	int WAP, lastWAP;
+	string Luanguage, lastLuanguage;
+	string ActiveTriggers, lastActiveTriggers;
+	int AutoUpload, lastAutoUpload;
 
 	tester->dbMap("PreEvent", &PreEvent);
 	tester->dbMap("PreExent", &PreEvent2);
@@ -41,16 +51,30 @@ int main(int argc, char *argv[])
 
 	if (!tester->StartService())
 	{
-		cerr << endl << "Cannot setup the connection to the headquater. Error=" << tester->m_err << endl;
+		cerr << endl << "Cannot setup the connection to the Commander. Error=" << tester->m_err << endl;
 		return -1;
 	}
 	tester->SndMsg("Hello from a client.", "1");
+
+	long myChannel = tester->GetServiceChannel("");
+	string myTitle = tester->GetServiceTitle(myChannel);
+	cout << "Service provider " << myTitle << " is up at " << myChannel << endl;
+
+	if (myChannel == 19)
+	{
+		tester->SendServiceSubscription("GPS");
+		tester->SendServiceSubscription("Trigger");
+		tester->SendServiceSubscription("Radar");
+		tester->SndMsg("Hello from " + myTitle, "GPS");
+		tester->SndMsg("Hello from " + myTitle, "Trigger");
+		tester->SndMsg("Hello from " + myTitle, "Radar");
+	}
 
 	size_t typeMsg;
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
-	int lastPreEvent = 1;
+//	int lastPreEvent = 1;
 	int count = 5;
 
 	string msg;
@@ -65,35 +89,78 @@ int main(int argc, char *argv[])
 		{
 			msg = tester->GetRcvMsg();
 			cout << datetime << " : Received messages '" << msg << "' of type " << typeMsg << " from " << tester->m_MsgChn << endl;
+
+			if (typeMsg == CMD_DOWN)
+			{
+				cout << myTitle << " is down by the command from commander." << endl;
+				break;
+			}
 		}
 
 		if (lastPreEvent != PreEvent)
 		{
-			cout << datetime << ":\n";
-			cout << "PreEvent is " << PreEvent << ".\n";
-			cout << "Chunk is " << Chunk << ".\n";
-			cout << "Camera path is '" << CamPath << "'.\n";
-			cout << "User is '" << User << "'.\n";
-			cout << "Password is '" << Password << "'.\n";
-			cout << "Cloud Server is '" << CloudServer << "'.\n";
-			cout << "WAP is " << WAP << ".\n";
-			cout << "Luanguage is '" << Luanguage << "'.\n";
-			cout << "Active Triggers are '" << ActiveTriggers << "'.\n";
-			cout << "Auto Upload is " << AutoUpload << ".\n";
-			cout << "PreExent is " << PreEvent2 << ".\n";
-
+			cout << datetime << " : PreEvent is changed to " << PreEvent << ".\n";
 			lastPreEvent = PreEvent;
+		}
+
+		if (lastChunk != Chunk)
+		{
+			cout << datetime << " : Chunk is changed to " << Chunk << ".\n";
+			lastChunk = Chunk;
+		}
+
+		if (lastCamPath != CamPath)
+		{
+			cout << datetime << " : Camera path is changed to '" << CamPath << "'.\n";
+			lastCamPath = CamPath;
+		}
+
+		if (lastUser != User)
+		{
+			cout << datetime << " : User is changed to '" << User << "'.\n";
+			lastUser = User;
+		}
+
+		if (lastPassword != Password)
+		{
+			cout << datetime << " : Password is changed to '" << Password << "'.\n";
+			lastPassword = Password;
+		}
+
+		if (lastCloudServer != CloudServer)
+		{
+			cout << datetime << " : Cloud Server is changed to '" << CloudServer << "'.\n";
+			lastCloudServer = CloudServer;
+		}
+
+		if (lastWAP != WAP)
+		{
+			cout << datetime << " : WAP is changed to " << WAP << ".\n";
+			lastWAP = WAP;
+		}
+
+		if (lastLuanguage != Luanguage)
+		{
+			cout << datetime << " : Luanguage is changed '" << Luanguage << "'.\n";
+			lastLuanguage = Luanguage;
+		}
+
+		if (lastActiveTriggers != ActiveTriggers)
+		{
+			cout << datetime << " : Active Triggers are changed to '" << ActiveTriggers << "'.\n";
+			lastActiveTriggers = ActiveTriggers;
+		}
+			
+		if (lastAutoUpload != AutoUpload)
+		{
+			cout << datetime << " : Auto Upload is changed to " << AutoUpload << ".\n";
+			lastAutoUpload = AutoUpload;
 		}
 
 		if (tester->WatchdogFeed())
 		{
-			cout << datetime << " : Heartbeat..\n";
 			count--;
-			if (!count)
-			{
-				cout << "Stopped\n";
-				break;
-			}
+			cout << datetime << " : Count down " << count << endl;
 
 			switch (count)
 			{
@@ -112,11 +179,20 @@ int main(int argc, char *argv[])
 				PreEvent = 30;
 				Chunk = 20;
 				ActiveTriggers = "BRK";
+				tester->dbUpdate();
 				break;
 
 			case 1:
 				tester->dbQuery();
+				if (myChannel != 19)
+					count = 5;
 				break;
+
+			default:
+				// Send out a requist that this service is going to be down
+				tester->SndMsg(nullptr, CMD_DOWN, 0, 1);
+				cout << datetime << " : Send down request to commander.\n";
+				count = 0;
 			}
 		}
 	}

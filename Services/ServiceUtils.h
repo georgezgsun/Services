@@ -23,7 +23,7 @@ using namespace std;
 struct Property
 {
 	string keyword;// keyword of this property, shall match with those in database
-	size_t len;  // length of this property, 0 indicates string. 
+	char len;  // length of this property, 0 indicates string. 
 	void *ptr; // pointer to the real storage of the property
 };
 
@@ -60,10 +60,10 @@ public:
 	string GetRcvMsg(); // receive a text message from sspecified ervice provider, like GPS, RADAR, TRIGGER. Not Autoreply.
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
-	size_t WatchdogFeed(); // Feed the dog at watchdog server
-	bool Log(string logContent, long logType); // Send a log to log server
+	size_t WatchdogFeed(); // Feed the dog at watchdog commander
+	bool Log(string logContent, long logType); // Send a log to log commander
 
-	bool dbMap(string keyword, void *p, size_t len); // assign *p to store the variable queried from the database with length len, len=0 for string
+	bool dbMap(string keyword, void *p, char len); // assign *p to store the variable queried from the database with length len, len=0 for string
 	bool dbMap(string keyword, string *s); // assign *s to store the string queried from the database
 	bool dbMap(string keyword, int *n); // assign *n to store the integer queried from the database
 	bool dbQuery(); // query the database. The result will be placed in variables linked to the keyword before.
@@ -91,8 +91,8 @@ protected:
 	size_t m_DataLength; // store the length of service data
 
 	size_t m_TotalServices;
-	string m_ServiceTitles[255];  // Service titles list got from server
-	long m_ServiceChannels[255];  // Services Channels list got from server
+	string m_ServiceTitles[255];  // Service titles list got from commander
+	long m_ServiceChannels[255];  // Services Channels list got from commander
 
 	size_t m_TotalProperties;
 	long m_TotalMessageSent;

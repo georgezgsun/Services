@@ -15,7 +15,7 @@
 
 ServiceUtils::ServiceUtils(int argc, char *argv[])
 {
-	// Get the key for the message queue from pid for server, ppid for clients
+	// Get the key for the message queue from pid for commander, ppid for clients
 	m_ID = -1;
 	m_err = 0;
 	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
@@ -24,7 +24,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	{
 		m_Chn = 1;
 		m_Key = getpid();
-		m_Title.assign("SERVER");
+		m_Title.assign("COMMANDER");
 	}
 	else
 	{
@@ -75,15 +75,15 @@ bool ServiceUtils::StartService()
 		return false;
 	}
 
-	// The initialization of the server and other service providers are different
+	// The initialization of the commander and other service providers are different
 	if (m_Chn == 1)
 	{
-		// Read off all previous messages in the queue at server starts
+		// Read off all previous messages in the queue at commander starts
 		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), 0, IPC_NOWAIT) > 0)
 		{
 			count++;
 		}
-		printf("(Debug) There are %d stale messages in server's message queue.\n", count);
+		printf("(Debug) There are %d stale messages in commander's message queue.\n", count);
 		m_err = 0;
 		return true;
 	}
@@ -101,16 +101,16 @@ bool ServiceUtils::StartService()
 		printf("(Debug) Service provider '%s' starts on channel #%ld with PID=%u, PPID=%u. There are %d stale messages for it.\n", 
 			m_Title.c_str(), m_Chn, pid, ppid, count);
 
-		// Report onboard to the server
-		size_t len = sizeof(pid);
-		memcpy(txt, &pid, len);
+		// Report onboard to the commander
+		strcpy(txt, m_Title.c_str());
+		size_t len = m_Title.length() + 1;
+		memcpy(txt + len, &pid, len);
+		len += sizeof(pid);
 		memcpy(txt + len, &ppid, len);
-		len += len;
-		strcpy(txt + len, m_Title.c_str());
-		len += m_Title.length() + 1;
-		bool rst = SndMsg(txt, CMD_ONBOARD, len, 1);
+		len += sizeof(pid);
+		SndMsg(txt, CMD_ONBOARD, len, 1);
 
-		// Get initialization from the server;
+		// Get initialization from the commander;
 		count = 5;
 		do
 		{
@@ -118,17 +118,17 @@ bool ServiceUtils::StartService()
 			if (count-- <= 0)
 			{
 				m_err = -10;
-				Log("Cannot get the initialization messages from the server in 5ms.", 10);
+				Log("Cannot get the initialization messages from the commander in 5ms.", 10);
 				return false;
 			}
 		} while (m_TotalServices <= 0);
 		printf("(Debug) Get initialized in %dms.\n", 5 - count);
 		
-		// Broadcast my onboard messages to all service channels other than the server and myself
+		// Broadcast my onboard messages to all service channels other than the commander and myself
 		for (size_t i = 1; i < m_TotalServices; i++)
-			rst = SndMsg(txt, CMD_ONBOARD, len, m_ServiceChannels[i]);
+			SndMsg(txt, CMD_ONBOARD, len, m_ServiceChannels[i]);
 
-		return rst;
+		return true;
 	}
 	return true;
 }
@@ -138,7 +138,7 @@ ServiceUtils::~ServiceUtils()
 	for (size_t i = 0; i < m_TotalProperties; i++)
 		delete m_pptr[i];
 
-	// if the server closed, delete the message queue
+	// if the commander closed, delete the message queue
 	if (1 == m_Chn)
 		msgctl(m_ID, IPC_RMID, nullptr);
 };
@@ -178,7 +178,7 @@ bool ServiceUtils::SndMsg(string msg, string ServiceTitle)
 		m_err = 0;
 		m_TotalMessageSent++;
 		if (m_buf.rChn == 1)
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec + 2;  // set the next watchdog feed 2s later
+			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
 		return true;
 	}
 	m_err = errno;
@@ -210,6 +210,13 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 		return false;
 	}
 
+	if (len > 255)
+	{
+		Log("Error. Length of the message to be sent is limited to 255.", 130);
+		m_err = -2;
+		return false;
+	}
+
 	m_buf.rChn = ServiceChannel;
 	if (m_buf.rChn <= 0)
 	{
@@ -220,35 +227,21 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 	if (m_Chn == m_buf.rChn) // do not send messages to itself
 		return false;
 
-	if (len > 255)
-	{
-		printf("(Debug) Error. %ld is an invalid length. It shall be 0-255.", len);
-		m_err = -3;
-		return false;
-	}
-
-	if (type > 255)
-	{
-		printf("(Debug) Error. %ld is an invalid data type. It shall be 0-255.", type);
-		m_err = -4;
-		return false;
-	}
-
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
-	m_buf.len = len;
+	m_buf.len = len;  // len is of 0-255, so do the cast here.
 	m_buf.type = type;
 
-	memcpy(m_buf.mText, p, len);
-	if (msgsnd(m_ID, &m_buf, len + m_HeaderLength, IPC_NOWAIT) == 0)
+	memcpy(m_buf.mText, p, m_buf.len);
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
 	{
 		m_err = 0;
 		m_TotalMessageSent++;
 		if (ServiceChannel == 1)
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec + 2;  // set the next watchdog feed 2s later
+			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
 		return true;
 	}
 
@@ -326,7 +319,7 @@ bool ServiceUtils::SendServiceQuery(string ServiceTitle)
 		if (offset + len > 255)
 		{
 			m_buf.len = offset;
-			if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT))
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 			{
 				m_err = errno;
 				return false;
@@ -343,7 +336,7 @@ bool ServiceUtils::SendServiceQuery(string ServiceTitle)
 
 		//assign the length of the property
 		len = m_pptr[i]->len;
-		m_buf.mText[offset++] = m_pptr[i]->len & 0xFF;
+		m_buf.mText[offset++] = m_pptr[i]->len;
 
 		// assign the value of the property
 		if (len)
@@ -360,7 +353,7 @@ bool ServiceUtils::SendServiceQuery(string ServiceTitle)
 	}
 
 	m_buf.len = offset;
-	if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
 	{
 		m_err = 0;
 		m_TotalMessageSent++;
@@ -404,15 +397,30 @@ bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t m_Dat
 	memset(m_Data, 0, sizeof(m_Data));
 	memcpy(m_Data, p, m_DataLength);
 
-	for (size_t i = 0; i < m_TotalClients; i++)
-	{
-		m_buf.rChn = m_Clients[i];
-		if (!msgsnd(m_ID, &m_buf, m_DataLength + m_HeaderLength, IPC_NOWAIT))
+	// The commander will broadcast the message to all live service provider. 
+	// The service provider will broadcast the service data to all its clients
+	if (m_Chn == 1)
+		for (size_t i = 0; i < m_TotalServices; i++)
 		{
-			m_err = errno;
-			return false;
+			m_buf.rChn = m_ServiceChannels[i];
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
+			{
+				m_err = errno;
+				return false;
+			}
+			m_TotalMessageSent++;
 		}
-	}
+	else
+		for (size_t i = 0; i < m_TotalClients; i++)
+		{
+			m_buf.rChn = m_Clients[i];
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
+			{
+				m_err = errno;
+				return false;
+			}
+			m_TotalMessageSent++;
+		}
 
 	m_err = 0;
 	return true;
@@ -436,9 +444,6 @@ size_t ServiceUtils::GetRcvMsgBuf(char **p)
 // receive a packet from specified service provider. Autoreply all requests when enabled.
 size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service provider. Autoreply all requests
 {
-	size_t i;
-	size_t j;
-	size_t n;
 	size_t offset = 0;
 	struct timespec tim = { 0, 1000000L }; // sleep for 1ms
 
@@ -462,13 +467,18 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 		m_MsgTS_usec = m_buf.usec;
 		string keyword;
 
-		// no autoreply for server
+		// no autoreply for commander
 		if (m_Chn == 1)
 		{
-			m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec + 5; // set the watchdog 5s later
+			m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; // set the watchdog timer for that channel
 			//printf("(Debug) Watchdog timer %d updates to %ld.\n", m_MsgChn, m_WatchdogTimer[m_MsgChn]);
-			if (m_buf.type == CMD_ONBOARD)  // keep record for those onboard services in the server
-				m_ServiceChannels[m_TotalServices++] = m_buf.sChn;
+
+			// keep record for those onboard services in the commander
+			if (m_buf.type == CMD_ONBOARD)
+			{
+				m_ServiceChannels[m_TotalServices] = m_buf.sChn;
+				m_ServiceTitles[m_TotalServices++].assign(m_buf.mText);
+			}
 
 			if (m_buf.type != CMD_DATABASEUPDATE)
 				return m_buf.type;
@@ -482,8 +492,9 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 				if (keyword == "") // end of assignment when keyword is empty
 					return m_buf.type; 
 
-				n = m_buf.mText[offset++]; // read data length, 0 represents for string
+				char n = m_buf.mText[offset++]; // read data length, 0 represents for string
 				bool keywordMatched = false;
+				size_t i;
 				for (i = 0; i < m_TotalProperties; i++)
 				{
 					// check if the keyword matched
@@ -541,6 +552,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 					return m_buf.type;
 				}
 
+				size_t i;
 				for (i = 0; i < m_TotalClients; i++)
 					if (m_Clients[i] == m_MsgChn)
 					{
@@ -551,14 +563,14 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 					break; // break switch
 
 				m_Clients[m_TotalClients++] = m_MsgChn; // increase m_TotalClients by 1
-				Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now has " + to_string(m_TotalClients) + " clients.", 1000);
+				Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 1000);
 			}
 			else
 			{  // delete the corresponding subscriber from the list when the type is negative
-				for (i = 0; i < m_TotalClients; i++)
+				for (size_t i = 0; i < m_TotalClients; i++)
 					if (m_Clients[i] + m_MsgChn == 0)
 					{  // move later subscriber one step up
-						for (j = i; j < m_TotalClients - 1; j++)
+						for (size_t j = i; j < m_TotalClients - 1; j++)
 							m_Clients[j] = m_Clients[j + 1];
 						m_TotalClients--;  // decrease m_TotalClients by 1
 					}
@@ -573,7 +585,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 			SndMsg(m_Data, m_DataType, m_DataLength, m_MsgChn);
 			break; // continue to read next message
 
-		// auto process the services list reply from the server
+		// auto process the services list reply from the commander
 		// [channel_1][title_1][channel_2][title_2] ... [channel_n][title_n] ; titles are end with /0. channel is of size 1 byte
 		case CMD_LIST:
 			offset = 0;
@@ -584,10 +596,10 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 				m_ServiceTitles[m_TotalServices].assign(m_buf.mText + offset);
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
 			} while (offset < m_buf.len);
-			printf("Received new services list from the server. My service title is %s. There are %d services in the list.\n", GetServiceTitle(m_Chn).c_str(), m_TotalServices);
+			printf("Received new services list from the commander. My service title is %s. There are %d services in the list.\n", GetServiceTitle(m_Chn).c_str(), m_TotalServices);
 			break;
 
-		// auto process the database feedback from the server
+		// auto process the database feedback from the commander
 		// [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
 		// end with keyword empty, type and length are of size 1 byte, keyword end with /0
 		case CMD_DATABASEQUERY:
@@ -599,8 +611,9 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 				if (keyword == "") // end of assignment when keyword is empty
 					break;
 
-				n = m_buf.mText[offset++]; // read data length, 0 represents for string
+				char n = m_buf.mText[offset++]; // read data length, 0 represents for string
 				bool keywordMatched = false;
+				size_t i;
 				for (i = 0; i < m_TotalProperties; i++)
 				{
 					// check if matched before
@@ -611,7 +624,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 						if (!keywordMatched)
 						{
 							m_err = -11;
-							Log("Fatal error! The data length/type of " + keyword + " from server is " \
+							Log("Fatal error! The data length/type of " + keyword + " from commander is " \
 								+ to_string(n) + ", locals is of " \
 								+ to_string(m_pptr[i]->len) + ". They are not indentical.", \
 								- m_err);
@@ -658,16 +671,23 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 		// [Service channel]
 		case CMD_DOWN:
 			memcpy(&l, m_buf.mText, sizeof(l)); // l stores the service channel which was down
+			
+			// return CMD_DOWN if it is the command from the commander to let this service down
+			if (m_MsgChn == 1 && m_Chn == l)
+				return m_buf.type;
 
+			//Log("Got message from " + to_string(m_MsgChn) + " that service channel " + to_string(l) + " is down.", 1000);
+			//Log("My total clients is " + to_string(m_TotalClients) + ", the first is " + to_string(m_Clients[0]), 1000);
+			// if it is not from the server
 			if (m_MsgChn > 1)
 				l = m_MsgChn;
 
 			// stop broadcasting service data to that client
-			for (i = 0; i < m_TotalClients; i++)
+			for (size_t i = 0; i < m_TotalClients; i++)
 				if (m_Clients[i] == l)
 				{
 					// move later subscriber one step up
-					for (j = i; j < m_TotalClients - 1; j++)
+					for (size_t j = i; j < m_TotalClients - 1; j++)
 						m_Clients[j] = m_Clients[j + 1];
 					m_TotalClients--;  // decrease m_TotalClients by 1
 
@@ -698,7 +718,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 	return m_buf.type;
 }
 
-// Feed the dog at watchdog server
+// Feed the dog at watchdog commander
 size_t ServiceUtils::WatchdogFeed()
 {
 	// Message queue has not been opened
@@ -710,7 +730,7 @@ size_t ServiceUtils::WatchdogFeed()
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
-	m_buf.rChn = 1; // always sends to server
+	m_buf.rChn = 1; // always sends to commander
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
@@ -720,8 +740,8 @@ size_t ServiceUtils::WatchdogFeed()
 	// Handle the service provider.
 	if (m_Chn > 1)
 	{
-		// Do not feed the watchdog too often
-		if (m_buf.sec < m_WatchdogTimer[m_buf.rChn])
+		// feed the watchdog roughly every second
+		if (m_buf.sec <= m_WatchdogTimer[m_buf.rChn])
 			return 0;
 
 		// Send heartbeat message and set new timer threshold
@@ -729,7 +749,7 @@ size_t ServiceUtils::WatchdogFeed()
 		{
 			m_err = 0;
 			m_TotalMessageSent++;
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec + 2;
+			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // re-set watchdog timer for that channel
 			return 1;
 		}
 
@@ -737,11 +757,11 @@ size_t ServiceUtils::WatchdogFeed()
 		return 0;
 	}
 
-	// Handle the server watchdog
+	// Handle the commander watchdog
 	for (size_t i = 0; i < m_TotalServices; i++)
 	{
 		size_t index = m_ServiceChannels[i];
-		if (m_WatchdogTimer[index] > 0 && m_buf.sec >= m_WatchdogTimer[index])
+		if (m_WatchdogTimer[index] > 0 && m_buf.sec >= m_WatchdogTimer[index] + 5)
 		{
 			//printf("(Debug) Watchdog %d reached at %ld.%6ld, where timer is %ld.\n", index, m_buf.sec, m_buf.usec, m_WatchdogTimer[index]);
 			m_WatchdogTimer[index] = 0;
@@ -751,14 +771,14 @@ size_t ServiceUtils::WatchdogFeed()
 	return 0;
 };
 
-// Send a Log to server
+// Send a Log to commander
 // Sending format is [LogType][LogContent]
 bool ServiceUtils::Log(string LogContent, long LogType)
 {
-	// for server, log is not sent
+	// for commander, log is not sent
 	if (m_Chn == 1)
 	{
-		printf("Server log : [%d] %s\n", LogType, LogContent.c_str());
+		printf("commander log : [%d] %s\n", LogType, LogContent.c_str());
 		return true;
 	}
 
@@ -771,7 +791,7 @@ bool ServiceUtils::Log(string LogContent, long LogType)
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
-	m_buf.rChn = 1; // log is always sent to server
+	m_buf.rChn = 1; // log is always sent to commander
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
@@ -784,7 +804,7 @@ bool ServiceUtils::Log(string LogContent, long LogType)
 	{
 		m_err = 0;
 		m_TotalMessageSent++;
-		m_WatchdogTimer[m_buf.rChn] = m_buf.sec + 2;
+		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed 
 		return true;
 	}
 	m_err = errno;
@@ -792,7 +812,7 @@ bool ServiceUtils::Log(string LogContent, long LogType)
 };
 
 // assign *p to store the variable queried from the database with length len, len=0 for string
-bool ServiceUtils::dbMap(string keyword, void *p, size_t len)
+bool ServiceUtils::dbMap(string keyword, void *p, char len)
 {
 	if (!p)
 	{
@@ -807,7 +827,7 @@ bool ServiceUtils::dbMap(string keyword, void *p, size_t len)
 			if (m_pptr[i]->len != len)
 			{
 				m_err = -11;
-				Log("Error. Data type of " + keyword + " from the server is of " + to_string(m_pptr[i]->len) \
+				Log("Error. Data type of " + keyword + " from the commander is of " + to_string(m_pptr[i]->len) \
 					+ ". Not identical to " + to_string(len) + " . Total properties is " + to_string(m_TotalProperties), -m_err);
 				return false;
 			}
@@ -850,13 +870,13 @@ bool ServiceUtils::dbMap(string keyword, int *n)
 	return dbMap(keyword, n, sizeof(int));
 };
 
-// Send a request to database server to query for the value of keyword. The result will be placed in the queue by database server.
+// Send a request to database commander to query for the value of keyword. The result will be placed in the queue by database commander.
 bool ServiceUtils::dbQuery()
 {
 	return SndMsg(nullptr, CMD_DATABASEQUERY, 0, 1);
 };
 
-// Send a request to database to update all the values of keywords with newvalue. The database server will take care of the data type casting. 
+// Send a request to database to update all the values of keywords with newvalue. The database commander will take care of the data type casting. 
 // [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
 // end with keyword empty, type and length are of size 1 byte, keyword end with /0
 bool ServiceUtils::dbUpdate()
@@ -869,7 +889,7 @@ bool ServiceUtils::dbUpdate()
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
-	m_buf.rChn = 1; // always sends to server
+	m_buf.rChn = 1; // always sends to commander
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
@@ -886,7 +906,7 @@ bool ServiceUtils::dbUpdate()
 		if (offset + len > 255)
 		{
 			m_buf.len = offset;
-			if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT))
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 			{
 				m_err = errno;
 				return false;
@@ -903,7 +923,7 @@ bool ServiceUtils::dbUpdate()
 		
 		//assign the length of the property
 		len = m_pptr[i]->len;
-		m_buf.mText[offset++] = m_pptr[i]->len & 0xFF;
+		m_buf.mText[offset++] = m_pptr[i]->len;
 		
 		// assign the value of the property
 		if (len)
@@ -920,7 +940,7 @@ bool ServiceUtils::dbUpdate()
 	}
 
 	m_buf.len = offset;
-	if (msgsnd(m_ID, &m_buf, offset + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
 	{
 		m_err = 0;
 		m_TotalMessageSent++;
@@ -937,12 +957,20 @@ long ServiceUtils::GetServiceChannel(string serviceTitle)
 		if (serviceTitle.compare(m_ServiceTitles[i]) == 0)
 			return m_ServiceChannels[i];
 
+	// return service channel of myself
+	if (serviceTitle.empty())
+		return m_Chn;
+
 	// Check is it a number 
 	return atoi(serviceTitle.c_str());
 };
 
 string ServiceUtils::GetServiceTitle(long serviceChannel)
 {
+	// return service title of myself
+	if (!serviceChannel)
+		return m_Title;
+
 	for (size_t i = 0; i < m_TotalServices; i++)
 		if (serviceChannel == m_ServiceChannels[i])
 			return m_ServiceTitles[i];

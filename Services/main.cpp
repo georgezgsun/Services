@@ -24,8 +24,9 @@ int main(int argc, char *argv[])
 {
 	string msg;
 	string tmp;
+	string currentDateTime;
 
-	string serviceTitles[5] = { "SERVER", "GPS", "Radar", "Trigger", "FrontCam" };
+	string serviceTitles[5] = { "COMMANDER", "GPS", "Radar", "Trigger", "FrontCam" };
 	char serviceChannels[5] = { 1,3,4,5,19 };
 	char serviceListBuf[255]; // store the service list
 	size_t lengthServiceListBuf = 0;
@@ -70,7 +71,7 @@ int main(int argc, char *argv[])
 		cerr << endl << "Cannot launch the headquater." << endl;
 		return -1;
 	}
-	cout << endl << "Server starts. Waiting for clients to join...." << endl;
+	cout << endl << "commander starts. Waiting for clients to join...." << endl;
 
 	launcher->dbMap("PreEvent", &PreEvent);
 	launcher->dbMap("PreExent", &PreEvent2);
@@ -84,7 +85,7 @@ int main(int argc, char *argv[])
 	launcher->dbMap("Active Triggers", &ActiveTriggers, 0);
 	launcher->dbMap("Auto upload", &AutoUpload);
 
-	// Simulate the server/head working
+	// Simulate the commander/head working
 	while (1)
 	{
 		gettimeofday(&tv, nullptr);
@@ -93,32 +94,33 @@ int main(int argc, char *argv[])
 		chn = launcher->WatchdogFeed();
 		if (chn)
 		{
-			cout << getDateTime(tv.tv_sec, tv.tv_usec) << " : Warning. Watchdog " << chn << " alerts." << endl;
+			cout << getDateTime(tv.tv_sec, tv.tv_usec) 
+				<< " : Watchdog warning. Service provider '" << launcher->GetServiceTitle(chn) 
+				<< "' stops responding on channel " << chn << endl;
 		}
 
-		// check if there is any new message sent to server. These messages are not auto processed by the library.
+		// check if there is any new message sent to commander. These messages are not auto processed by the library.
 		typeMsg = launcher->ChkNewMsg();
 		if (!typeMsg)
 			continue;
 		len = launcher->GetRcvMsgBuf(&bufMsg);
 		//memcpy(bufMsg, p, len);
 
-		tmp = getDateTime(tv.tv_sec, tv.tv_usec);
-		cout << tmp << " : ";
-
+		currentDateTime = getDateTime(tv.tv_sec, tv.tv_usec);
 		tmp = getDateTime(launcher->m_MsgTS_sec, launcher->m_MsgTS_usec);
-		// process those messages sent to server
+		// process those messages sent to commander
 		switch (typeMsg)
 		{
 		case CMD_ONBOARD:
-			offset = 0;
+			sTitle.assign(bufMsg + offset);
+			offset = sTitle.length() + 1;
 			memcpy(&pid, bufMsg + offset, sizeof(pid));
 			offset += sizeof(pid);
 			memcpy(&ppid, bufMsg + offset, sizeof(ppid));
-			offset += sizeof(ppid);
-			sTitle.assign(bufMsg + offset);
 
-			cout << "Service provider " << sTitle << " gets onboard on channel " << launcher->m_MsgChn << " with PID=" << pid 
+			cout << currentDateTime << " : Service provider " << sTitle 
+				<< " gets onboard on channel " << launcher->m_MsgChn 
+				<< " with PID=" << pid
 				<< ", Parent PID=" << ppid << " at " << tmp << endl;
 
 			// send back the service list first
@@ -132,30 +134,42 @@ int main(int argc, char *argv[])
 			offset = 0;
 			memcpy(&logType, bufMsg, sizeof(logType));
 			logContent.assign(bufMsg + sizeof(logType));
-			cout << "LOG from channel " << launcher->m_MsgChn << ", [" << logType << "] " << logContent << " at " << tmp << endl;
+			cout << currentDateTime << " : LOG from channel " << launcher->m_MsgChn 
+				<< " on " << tmp << ", [" << logType << "] " << logContent  << endl;
 			break;
 
 		case CMD_DATABASEQUERY:
 			CloudServer = getDateTime(tv.tv_sec, 0);
 			PreEvent = tv.tv_usec;
 			launcher->SendServiceQuery(to_string(launcher->m_MsgChn));
-			cout << "Got database query request from channel " << launcher->m_MsgChn << " at " << tmp << endl;
+			cout << currentDateTime << " : Got database query request from channel " 
+				<< launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		case CMD_WATCHDOG:
-			cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
+			//cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		case CMD_STRING:
-			cout << "Got a message of string '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn << " at " << tmp << endl;
+			cout << currentDateTime << " : Got a message of string '" << launcher->GetRcvMsg() 
+				<< "' from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		case CMD_DATABASEUPDATE:
-			cout << "Got a database update request from channel " << launcher->m_MsgChn << " at " << tmp << endl;
+			cout << currentDateTime << " : Got a database update request from channel " 
+				<< launcher->m_MsgChn << " at " << tmp << endl;
+			break;
+
+		case CMD_DOWN:
+			cout << currentDateTime << " : Got a message of service down from channel "
+				<< launcher->m_MsgChn << " at " << tmp << endl;
+			launcher->BroadcastServiceDataUpdate(&launcher->m_MsgChn, CMD_DOWN, sizeof(launcher->m_MsgChn));
+			cout << currentDateTime << " : Broadcast the message that service on channel "
+				<< launcher->m_MsgChn << " is down at " << tmp << endl;
 			break;
 
 		default:
-			cout << "Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn \
+			cout << currentDateTime << " : Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn
 				<< " with type of " << typeMsg << " and length of " << len << " at " << tmp << endl;
 		}
 	}
