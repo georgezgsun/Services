@@ -30,7 +30,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	{
 		m_Chn = atoi(argv[1]);
 		m_Key = getppid();
-		m_Title = "";
+		m_Title.clear();
 		m_err = m_Chn <= 0 ? -1 : 0;
 	}
 
@@ -364,7 +364,7 @@ bool ServiceUtils::SendServiceQuery(string ServiceTitle)
 }
 
 // broadcast the service data to all clients
-bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t m_DataLength)
+bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t len)
 {
 	if (m_ID == -1)
 	{
@@ -372,11 +372,12 @@ bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t m_Dat
 		return false;
 	}
 
-	if (m_DataLength > 255)
+	if (len > 255)
 	{
 		m_err = -3;
 		return false;
 	}
+	m_DataLength = len;
 
 	if (type > 255)
 	{
@@ -393,9 +394,9 @@ bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t m_Dat
 	m_buf.type = type;
 	m_buf.len = m_DataLength;
 	memset(m_buf.mText, 0, sizeof(m_buf.mText));  // clear the sending buffer
-	memcpy(m_buf.mText, p, m_DataLength);
+	memcpy(m_buf.mText, p, m_DataLength);  // copy the service data into message buffer
 	memset(m_Data, 0, sizeof(m_Data));
-	memcpy(m_Data, p, m_DataLength);
+	memcpy(m_Data, p, m_DataLength);  // copy the data into service data buffer
 
 	// The commander will broadcast the message to all live service provider. 
 	// The service provider will broadcast the service data to all its clients
@@ -429,8 +430,6 @@ bool ServiceUtils::BroadcastServiceDataUpdate(void *p, size_t type, size_t m_Dat
 // receive a message from sspecified ervice provider, like GPS, RADAR, TRIGGER. No AutoReply
 string ServiceUtils::GetRcvMsg()
 {
-	//string msg = "";
-	//msg.assign(m_buf.mText);
 	return m_buf.mText;
 }
 
@@ -489,7 +488,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 			{
 				keyword.assign(m_buf.mText + offset); // read the keyword
 				offset += keyword.length() + 1; // there is a /0 in the end
-				if (keyword == "") // end of assignment when keyword is empty
+				if (keyword.empty()) // end of assignment when keyword is empty
 					return m_buf.type; 
 
 				char n = m_buf.mText[offset++]; // read data length, 0 represents for string
@@ -541,7 +540,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 
 		switch (m_buf.type)
 		{
-			// auto reply for new subscription request
+		// auto reply for new subscription request
 		case CMD_SUBSCRIBE:
 			if (m_MsgChn > 0) // add new subscriber to the list when the type is positive
 			{
@@ -566,10 +565,12 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 				Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 1000);
 			}
 			else
-			{  // delete the corresponding subscriber from the list when the type is negative
+			{  
+				// delete the corresponding subscriber from the list when the type is negative
 				for (size_t i = 0; i < m_TotalClients; i++)
 					if (m_Clients[i] + m_MsgChn == 0)
-					{  // move later subscriber one step up
+					{  
+						// move later subscriber one step up
 						for (size_t j = i; j < m_TotalClients - 1; j++)
 							m_Clients[j] = m_Clients[j + 1];
 						m_TotalClients--;  // decrease m_TotalClients by 1
@@ -597,7 +598,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
 			} while (offset < m_buf.len);
 			printf("Received new services list from the commander. My service title is %s. There are %d services in the list.\n", GetServiceTitle(m_Chn).c_str(), m_TotalServices);
-			break;
+			break; // continue to read next message
 
 		// auto process the database feedback from the commander
 		// [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
@@ -608,7 +609,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 			{
 				keyword.assign(m_buf.mText + offset); // read the keyword
 				offset += keyword.length() + 1; // there is a /0 in the end
-				if (keyword == "") // end of assignment when keyword is empty
+				if (keyword.empty()) // end of assignment when keyword is empty
 					break;
 
 				char n = m_buf.mText[offset++]; // read data length, 0 represents for string
@@ -665,7 +666,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 					offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
 				}
 			} while (offset < 255);
-			break;
+			break; // continue to read next message
 
 		// auto process the message that a service is down.
 		// [Service channel]
@@ -676,8 +677,6 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 			if (m_MsgChn == 1 && m_Chn == l)
 				return m_buf.type;
 
-			//Log("Got message from " + to_string(m_MsgChn) + " that service channel " + to_string(l) + " is down.", 1000);
-			//Log("My total clients is " + to_string(m_TotalClients) + ", the first is " + to_string(m_Clients[0]), 1000);
 			// if it is not from the server
 			if (m_MsgChn > 1)
 				l = m_MsgChn;
@@ -693,7 +692,7 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 
 					Log("Channel " + to_string(l) + " is down. Stop broadcasting service data to it. Total clients now is " + to_string(m_TotalClients), 1000);
 				}
-			break;
+			break; // continue to read next message
 
 		// auto process the onboard message
 		case CMD_ONBOARD:
@@ -704,14 +703,13 @@ size_t ServiceUtils::ChkNewMsg() // receive a packet from specified service prov
 					SndMsg(nullptr, CMD_SUBSCRIBE, 0, m_MsgChn);
 					break;
 				}
-			break;
+			break; // continue to read next message
 
 		default:
 			m_err = -50;
 			Log("Error! Unkown command " + to_string(m_buf.type) + " from " \
 				+ to_string(m_buf.sChn), -m_err);
 			return m_buf.type;
-
 		}
 
 	} while (m_err == 0);
