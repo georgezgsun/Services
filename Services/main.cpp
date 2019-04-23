@@ -26,7 +26,7 @@ int main(int argc, char *argv[])
 	string tmp;
 	string currentDateTime;
 
-	string serviceTitles[5] = { "COMMANDER", "GPS", "Radar", "Trigger", "FrontCam" };
+	string serviceTitles[5] = { "MAIN", "GPS", "Radar", "Trigger", "FrontCam" };
 	char serviceChannels[5] = { 1,3,4,5,19 };
 	char serviceListBuf[255]; // store the service list
 	size_t lengthServiceListBuf = 0;
@@ -71,21 +71,21 @@ int main(int argc, char *argv[])
 		cerr << endl << "Cannot launch the headquater." << endl;
 		return -1;
 	}
-	cout << endl << "commander starts. Waiting for clients to join...." << endl;
+	cout << endl << "main module starts. Waiting for clients to join...." << endl;
 
-	launcher->dbMap("PreEvent", &PreEvent);
-	launcher->dbMap("PreExent", &PreEvent2);
-	launcher->dbMap("Chunk", &Chunk);
-	launcher->dbMap("CamPath", &CamPath);
-	launcher->dbMap("User", &User);
-	launcher->dbMap("PassWord", &Password);
-	launcher->dbMap("Cloud Server", &CloudServer, 0);
-	launcher->dbMap("WAP", &WAP, 4);
-	launcher->dbMap("Luanguage", &Luanguage, 0);
-	launcher->dbMap("Active Triggers", &ActiveTriggers, 0);
-	launcher->dbMap("Auto upload", &AutoUpload);
+	launcher->LocalMap("PreEvent", &PreEvent);
+	launcher->LocalMap("PreExent", &PreEvent2);
+	launcher->LocalMap("Chunk", &Chunk);
+	launcher->LocalMap("CamPath", &CamPath);
+	launcher->LocalMap("User", &User);
+	launcher->LocalMap("PassWord", &Password);
+	launcher->LocalMap("Cloud Server", &CloudServer, 0);
+	launcher->LocalMap("WAP", &WAP, 4);
+	launcher->LocalMap("Luanguage", &Luanguage, 0);
+	launcher->LocalMap("Active Triggers", &ActiveTriggers, 0);
+	launcher->LocalMap("Auto upload", &AutoUpload);
 
-	// Simulate the commander/head working
+	// Simulate the main module/head working
 	while (1)
 	{
 		gettimeofday(&tv, nullptr);
@@ -99,7 +99,7 @@ int main(int argc, char *argv[])
 				<< "' stops responding on channel " << chn << endl;
 		}
 
-		// check if there is any new message sent to commander. These messages are not auto processed by the library.
+		// check if there is any new message sent to main module. These messages are not auto processed by the library.
 		typeMsg = launcher->ChkNewMsg();
 		if (!typeMsg)
 			continue;
@@ -108,7 +108,7 @@ int main(int argc, char *argv[])
 
 		currentDateTime = getDateTime(tv.tv_sec, tv.tv_usec);
 		tmp = getDateTime(launcher->m_MsgTS_sec, launcher->m_MsgTS_usec);
-		// process those messages sent to commander
+		// process those messages sent to main module
 		switch (typeMsg)
 		{
 		case CMD_ONBOARD:
@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
 			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
 
 			// send back the database properties at the end
-			launcher->SendServiceQuery(to_string(launcher->m_MsgChn));
+			launcher->ServiceQuery(to_string(launcher->m_MsgChn));
 			break;
 
 		case CMD_LOG:
@@ -141,7 +141,7 @@ int main(int argc, char *argv[])
 		case CMD_DATABASEQUERY:
 			CloudServer = getDateTime(tv.tv_sec, 0);
 			PreEvent = tv.tv_usec;
-			launcher->SendServiceQuery(to_string(launcher->m_MsgChn));
+			launcher->ServiceQuery(to_string(launcher->m_MsgChn));
 			cout << currentDateTime << " : Got database query request from channel " 
 				<< launcher->m_MsgChn << " at " << tmp << endl;
 			break;
@@ -163,7 +163,9 @@ int main(int argc, char *argv[])
 		case CMD_DOWN:
 			cout << currentDateTime << " : Got a message of service down from channel "
 				<< launcher->m_MsgChn << " at " << tmp << endl;
-			launcher->BroadcastServiceDataUpdate(&launcher->m_MsgChn, CMD_DOWN, sizeof(launcher->m_MsgChn));
+
+			// broadcast the message that one channel has down
+			launcher->UpdateServiceData();
 			cout << currentDateTime << " : Broadcast the message that service on channel "
 				<< launcher->m_MsgChn << " is down at " << tmp << endl;
 			break;

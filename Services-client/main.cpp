@@ -9,12 +9,12 @@
 using namespace std;
 
 // tester on services utils
-// 1. Test the setup of message queue on both commander and client
-// 2. Test the startup procedure on both commander and client so that they can talk and the initialization is correct
-// 3. Test the dbMap function on both commander and client so that the keywords from the database may map local variable
-// 4. Test message send from a client can be received in commander correctly
-// 5. Test the watchdog function works on both commander and client
-// 6. Test database query and update data transfer is correct between commander and client
+// 1. Test the setup of message queue on both main module and client
+// 2. Test the startup procedure on both main module and client so that they can talk and the initialization is correct
+// 3. Test the LocalMap function on both main module and client so that the keywords from the database may map local variable
+// 4. Test message send from a client can be received in main module correctly
+// 5. Test the watchdog function works on both main module and client
+// 6. Test database query and update data transfer is correct between main module and client
 
 // TODO
 // 1. Test the service subscription and query
@@ -36,25 +36,32 @@ int main(int argc, char *argv[])
 	string Luanguage, lastLuanguage;
 	string ActiveTriggers, lastActiveTriggers;
 	int AutoUpload, lastAutoUpload;
+	string position = "3258.1187N,09642.9508W";
+	int height = 202;
+	int time;
 
-	tester->dbMap("PreEvent", &PreEvent);
-	tester->dbMap("PreExent", &PreEvent2);
-	tester->dbMap("Chunk", &Chunk);
-	tester->dbMap("CamPath", &CamPath);
-	tester->dbMap("User", &User);
-	tester->dbMap("PassWord", &Password);
-	tester->dbMap("Cloud Server", &CloudServer, 0);
-	tester->dbMap("WAP", &WAP, 4);
-	tester->dbMap("Luanguage", &Luanguage, 0);
-	tester->dbMap("Active Triggers", &ActiveTriggers, 0);
-	tester->dbMap("Auto upload", &AutoUpload);
+	tester->LocalMap("PreEvent", &PreEvent);
+	tester->LocalMap("PreExent", &PreEvent2);
+	tester->LocalMap("Chunk", &Chunk);
+	tester->LocalMap("CamPath", &CamPath);
+	tester->LocalMap("User", &User);
+	tester->LocalMap("PassWord", &Password);
+	tester->LocalMap("Cloud Server", &CloudServer, 0);
+	tester->LocalMap("WAP", &WAP, 4);
+	tester->LocalMap("Luanguage", &Luanguage, 0);
+	tester->LocalMap("Active Triggers", &ActiveTriggers, 0);
+	tester->LocalMap("Auto upload", &AutoUpload);
+
+	tester->AddToServiceData("position", &position);
+	tester->AddToServiceData("latitute", &height);
+	tester->AddToServiceData("epic", &time);
 
 	if (!tester->StartService())
 	{
-		cerr << endl << "Cannot setup the connection to the Commander. Error=" << tester->m_err << endl;
+		cerr << endl << "Cannot setup the connection to the main module. Error=" << tester->m_err << endl;
 		return -1;
 	}
-	tester->SndMsg("Hello from a client.", "1");
+	tester->SndCmd("Hello from a client.", "1");
 
 	long myChannel = tester->GetServiceChannel("");
 	string myTitle = tester->GetServiceTitle(myChannel);
@@ -62,15 +69,15 @@ int main(int argc, char *argv[])
 
 	if (myChannel == 19)
 	{
-		tester->SendServiceSubscription("GPS");
-		tester->SendServiceSubscription("Trigger");
-		tester->SendServiceSubscription("Radar");
-		tester->SndMsg("Hello from " + myTitle, "GPS");
-		tester->SndMsg("Hello from " + myTitle, "Trigger");
-		tester->SndMsg("Hello from " + myTitle, "Radar");
+		tester->ServiceSubscribe("GPS");
+		tester->ServiceSubscribe("Trigger");
+		tester->ServiceSubscribe("Radar");
+		tester->SndCmd("Hello from " + myTitle, "GPS");
+		tester->SndCmd("Hello from " + myTitle, "Trigger");
+		tester->SndCmd("Hello from " + myTitle, "Radar");
 	}
 
-	size_t typeMsg;
+	size_t command;
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
@@ -84,16 +91,23 @@ int main(int argc, char *argv[])
 		nowtm = localtime(&tv.tv_sec);
 		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
-		typeMsg = tester->ChkNewMsg();
-		if (typeMsg)
+
+		command = tester->ChkNewMsg();
+		if (command)
 		{
 			msg = tester->GetRcvMsg();
-			cout << datetime << " : Received messages '" << msg << "' of type " << typeMsg << " from " << tester->m_MsgChn << endl;
+			cout << datetime << " : Received messages '" << msg << "' of type " << command << " from " << tester->m_MsgChn << endl;
 
-			if (typeMsg == CMD_DOWN)
+			if (command == CMD_DOWN)
 			{
-				cout << myTitle << " is down by the command from commander." << endl;
+				cout << myTitle << " is down by the command from main module." << endl;
 				break;
+			}
+
+			if (command == CMD_COMMAND)
+			{
+				cout << "Get a command '" << msg << "' from " << tester->m_MsgChn << endl;
+				continue;
 			}
 		}
 
@@ -191,7 +205,7 @@ int main(int argc, char *argv[])
 			default:
 				// Send out a requist that this service is going to be down
 				tester->SndMsg(nullptr, CMD_DOWN, 0, 1);
-				cout << datetime << " : Send down request to commander.\n";
+				cout << datetime << " : Send down request to main module.\n";
 				count = 0;
 			}
 		}
