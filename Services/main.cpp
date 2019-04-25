@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
 	pid_t pid;
 	pid_t ppid;
 	string sTitle;
-	long logType;
+	size_t logType;
 	string logContent;
 	struct timeval tv;
 

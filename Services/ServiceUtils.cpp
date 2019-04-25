@@ -15,9 +15,9 @@
 
 ServiceUtils::ServiceUtils(int argc, char *argv[])
 {
-	// Get the key for the message queue from pid for main module, ppid for clients
 	m_ID = -1;
 	m_err = 0;
+	// Get the key for the message queue from pid for main module, ppid for clients
 	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
 
 	if (argc <= 1)
@@ -50,24 +50,24 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	printf("(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
 	m_err = m_ID == -1 ? -3 : 0;
 
-	// initializing those internal buffers
-	memset(&m_buf, 0, sizeof(m_buf));
-	memset(m_Clients, 0, sizeof(m_Clients));
-	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
-	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
-	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
-	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
-	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
-	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
-
-	m_TotalSubscriptions = 0;
 	m_TotalClients = 0;
-	m_TotalMessageSent = 0;
-	m_TotalMessageReceived = 0;
-	m_TotalServices = 0;
-	m_TotalProperties = 0;
 	m_TotalDataBaseElements = 0;
+	m_TotalMessageReceived = 0;
+	m_TotalMessageSent = 0;
+	m_TotalProperties = 0;
 	m_TotalServiceDataElements = 0;
+	m_TotalServices = 0;
+	m_TotalSubscriptions = 0;
+	m_LogLevel = 1;
+
+	memset(m_Clients, 0, sizeof(m_Clients));
+	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
+	memset(m_ServiceData, 0, sizeof(m_ServiceData));
+	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
+	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
+	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
+	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
+	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
 };
 
 bool ServiceUtils::StartService()
@@ -393,7 +393,7 @@ bool ServiceUtils::UpdateServiceData()
 		size_t chn;
 		memcpy(m_buf.mText, m_ServiceData, m_ServiceDataLength);
 		memcpy(&chn, m_ServiceData, sizeof(chn));
-		for (size_t i = 1; i < m_TotalServices; i++)
+		for (size_t i = 0; i < m_TotalServices; i++)
 		{
 			if (i == chn)
 				continue;
@@ -687,6 +687,10 @@ size_t ServiceUtils::ChkNewMsg()
 					m_TotalProperties++;
 				}
 
+				// map the special LogLevel element
+				if (keyword == "LogLevel" && n == sizeof(size_t))
+					m_pptr[m_TotalProperties]->ptr = &m_LogLevel; 
+
 				if (m_pptr[i]->len) // type 0 means a string which shall be assigned the value in a different way
 				{
 					if (!m_pptr[i]->ptr)  // make sure the pointer is not NULL before assign any value to it
@@ -872,7 +876,7 @@ size_t ServiceUtils::WatchdogFeed()
 
 // Send a Log to main module
 // Sending format is [LogType][LogContent]
-bool ServiceUtils::Log(string LogContent, long LogType)
+bool ServiceUtils::Log(string LogContent, size_t LogType)
 {
 	// for main module, log is not sent
 	if (m_Chn == 1)
@@ -887,6 +891,15 @@ bool ServiceUtils::Log(string LogContent, long LogType)
 		m_err = -1;
 		return false;
 	}
+
+	size_t loglevel = 2000;
+	if (m_LogLevel == 2)
+		loglevel = 3000;
+	if (m_LogLevel > 2)
+		loglevel = 10000;
+
+	if (LogType > loglevel)
+		return false;
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
