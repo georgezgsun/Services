@@ -13,6 +13,38 @@
 
 #define PERMS 0644
 
+ServiceUtils::ServiceUtils()
+{
+	m_ID = -1;
+	m_err = 0;
+	// Get the key for the message queue from pid for main module, ppid for clients
+	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
+
+	m_Chn = 1;
+	m_Key = getpid();
+	m_Title.assign("MAIN");
+
+	m_TotalClients = 0;
+	m_TotalDataBaseElements = 0;
+	m_TotalMessageReceived = 0;
+	m_TotalMessageSent = 0;
+	m_TotalProperties = 0;
+	m_TotalServiceDataElements = 0;
+	m_TotalServices = 0;
+	m_TotalSubscriptions = 0;
+	m_Severity = 4;
+
+	memset(m_Clients, 0, sizeof(m_Clients));
+	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
+	memset(m_ServiceData, 0, sizeof(m_ServiceData));
+	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
+	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
+	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
+	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
+	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
+}
+
+// Constructor, where first argument is for the service channel, second is for the service title. Example 3 GPS
 ServiceUtils::ServiceUtils(int argc, char *argv[])
 {
 	m_ID = -1;
@@ -58,7 +90,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_TotalServiceDataElements = 0;
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
-	m_LogLevel = 1;
+	m_Severity = 4;
 
 	memset(m_Clients, 0, sizeof(m_Clients));
 	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
@@ -70,6 +102,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
 };
 
+// Start the service and do the initialization
 bool ServiceUtils::StartService()
 {
 	int count = 0;
@@ -122,7 +155,7 @@ bool ServiceUtils::StartService()
 			if (count-- <= 0)
 			{
 				m_err = -10;
-				Log("Cannot get the initialization messages from the main module in 5ms.", 10);
+				Log("Cannot get the initialization messages from the main module in 5ms.", 1);
 				return false;
 			}
 		} while (m_TotalServices <= 0);
@@ -216,7 +249,7 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 
 	if (len > 255)
 	{
-		Log("Error. Length of the message to be sent is limited to 255.", 130);
+		Log("Error. Length of the message to be sent is limited to 255.", 2);
 		m_err = -2;
 		return false;
 	}
@@ -254,6 +287,32 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 	return false;
 };
 
+// Re-send the message to another service channel, using original settings and buffer
+bool ServiceUtils::ReSendMsgTo(long ServiceChannel)
+{
+	m_buf.rChn = ServiceChannel;
+	if (m_buf.rChn <= 0)
+	{
+		printf("(Debug) Error. %ld is an invalid service channel. It shall be positive.", ServiceChannel);
+		m_err = -2; // Cannot find the ServiceTitle in the list
+		return false;
+	}
+
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	{
+		m_err = 0;
+		m_TotalMessageSent++;
+		if (ServiceChannel == 1)
+			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+		return true;
+	}
+
+	printf("(Debug) Error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, m_buf.len, m_HeaderLength);
+	m_err = errno;
+	return false;
+}
+
+//Subscribe the service from the service provider with specified title
 bool ServiceUtils::ServiceSubscribe(string ServiceTitle)
 {
 	long ServiceChannel = GetServiceChannel(ServiceTitle);
@@ -282,7 +341,7 @@ bool ServiceUtils::ServiceSubscribe(string ServiceTitle)
 	return true;
 };
 
-// send the request for query service data from the provider channel
+// query the service data from the service provider with specified title
 bool ServiceUtils::ServiceQuery(string ServiceTitle)
 {
 	if (m_ID == -1)
@@ -398,13 +457,15 @@ bool ServiceUtils::UpdateServiceData()
 			if (i == chn)
 				continue;
 
-			m_buf.rChn = m_ServiceChannels[i];
-			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
-			{
-				m_err = errno;
+			//m_buf.rChn = m_ServiceChannels[i];
+			//if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
+			//{
+			//	m_err = errno;
+			//	return false;
+			//}
+			//m_TotalMessageSent++;
+			if (!ReSendMsgTo(m_ServiceChannels[i]))
 				return false;
-			}
-			m_TotalMessageSent++;
 		}
 		return true;
 	}
@@ -441,15 +502,17 @@ bool ServiceUtils::UpdateServiceData()
 
 	// The service provider will broadcast the service data to all its clients
 	for (size_t i = 0; i < m_TotalClients; i++)
-		{
-			m_buf.rChn = m_Clients[i];
-			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
-			{
-				m_err = errno;
-				return false;
-			}
-			m_TotalMessageSent++;
-		}
+		if (!ReSendMsgTo(m_Clients[i]))
+			return false;
+		//{
+		//	m_buf.rChn = m_Clients[i];
+		//	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
+		//	{
+		//		m_err = errno;
+		//		return false;
+		//	}
+		//	m_TotalMessageSent++;
+		//}
 
 	m_err = 0;
 	return true;
@@ -461,7 +524,7 @@ string ServiceUtils::GetRcvMsg()
 	return m_buf.mText;
 }
 
-// return the pointer of the buffer *p and its length. This buffer will change in next message operation.
+// get the pointer of the received buffer *p and its length. This buffer will change in next message operation.
 size_t ServiceUtils::GetRcvMsgBuf(char **p)
 {
 	*p = m_buf.mText;
@@ -583,7 +646,7 @@ size_t ServiceUtils::ChkNewMsg()
 			for (i = 0; i < m_TotalClients; i++)
 				if (m_Clients[i] == m_MsgChn)
 				{
-					Log("The client " + to_string(m_MsgChn) + " is already subscribed.", 1000);
+					Log("The client " + to_string(m_MsgChn) + " is already subscribed.");
 					break; // break for loop
 				}
 			if (i < m_TotalClients)
@@ -593,12 +656,12 @@ size_t ServiceUtils::ChkNewMsg()
 			if (m_TotalClients >= 255)
 			{
 				m_err = -14;
-				Log("Error. Too many clients added.", -m_err);
+				Log("Error. Too many clients added.", 1);
 				return m_buf.type;
 			}
 
 			m_Clients[m_TotalClients++] = m_MsgChn; // increase m_TotalClients by 1
-			Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 1000);
+			Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 5);
 			break;
 			
 		case CMD_UNSUBSCRIBE:
@@ -612,7 +675,7 @@ size_t ServiceUtils::ChkNewMsg()
 					m_TotalClients--;  // decrease m_TotalClients by 1
 				}
 
-			Log("Service subscription from " + to_string(m_MsgChn) + " is canceled. Now has " + to_string(m_TotalClients) + " clients.", 1000);
+			Log("Service subscription from " + to_string(m_MsgChn) + " is canceled. Now has " + to_string(m_TotalClients) + " clients.", 5);
 			break; // continue to read next messages
 
 		// auto reply the query of service data query
@@ -662,8 +725,7 @@ size_t ServiceUtils::ChkNewMsg()
 							m_err = -11;
 							Log("Fatal error! The data length/type of " + keyword + " from main module is " \
 								+ to_string(n) + ", locals is of " \
-								+ to_string(m_pptr[i]->len) + ". They are not indentical.", \
-								- m_err);
+								+ to_string(m_pptr[i]->len) + ". They are not indentical.", 1);
 							return m_buf.type;
 						}
 
@@ -677,7 +739,7 @@ size_t ServiceUtils::ChkNewMsg()
 					// check if there are too many properties
 					if (m_TotalProperties >= 255)
 					{
-						Log("Error. Too many properties are added.", 15);
+						Log("Error. Too many properties are added.", 1);
 						return m_buf.type;
 					}
 					m_pptr[m_TotalProperties] = new Property;
@@ -687,9 +749,9 @@ size_t ServiceUtils::ChkNewMsg()
 					m_TotalProperties++;
 				}
 
-				// map the special LogLevel element
-				if (keyword == "LogLevel" && n == sizeof(size_t))
-					m_pptr[m_TotalProperties]->ptr = &m_LogLevel; 
+				// map the system pre-defined SeverityLevel element
+				if (keyword == "SeverityLevel" && n == sizeof(m_Severity))
+					m_pptr[i]->ptr = &m_Severity; 
 
 				if (m_pptr[i]->len) // type 0 means a string which shall be assigned the value in a different way
 				{
@@ -739,7 +801,8 @@ size_t ServiceUtils::ChkNewMsg()
 						m_Clients[j] = m_Clients[j + 1];
 					m_TotalClients--;  // decrease m_TotalClients by 1
 
-					Log("Channel " + to_string(l) + " is down. Stop broadcasting service data to it. Total clients now is " + to_string(m_TotalClients), 1000);
+					Log("Channel " + to_string(l) + " is down. Stop broadcasting service data to it. Total clients now is " 
+						+ to_string(m_TotalClients));
 				}
 			break; // continue to read next message
 
@@ -777,8 +840,7 @@ size_t ServiceUtils::ChkNewMsg()
 							m_err = -11;
 							Log("Fatal error! The data length/type of " + keyword + " from main module is " \
 								+ to_string(n) + ", locals is of " \
-								+ to_string(m_pptr[i]->len) + ". They are not indentical.", \
-								- m_err);
+								+ to_string(m_pptr[i]->len) + ". They are not indentical.", 1);
 							return m_buf.type;
 						}
 
@@ -810,8 +872,7 @@ size_t ServiceUtils::ChkNewMsg()
 
 		default:
 			m_err = -50;
-			Log("Error! Unkown command " + to_string(m_buf.type) + " from " \
-				+ to_string(m_buf.sChn), -m_err);
+			Log("Error! Unkown command " + to_string(m_buf.type) + " from " + to_string(m_buf.sChn), 1);
 			return m_buf.type;
 		}
 
@@ -874,14 +935,14 @@ size_t ServiceUtils::WatchdogFeed()
 	return 0;
 };
 
-// Send a Log to main module
+// Send a Log to main module with specified severe level
 // Sending format is [LogType][LogContent]
-bool ServiceUtils::Log(string LogContent, size_t LogType)
+bool ServiceUtils::Log(string LogContent, char Severity)
 {
-	// for main module, log is not sent
+	// for main module, log is print for debug
 	if (m_Chn == 1)
 	{
-		printf("main module log : [%d] %s\n", LogType, LogContent.c_str());
+		printf("main module log : [%d] %s\n", Severity, LogContent.c_str());
 		return true;
 	}
 
@@ -892,13 +953,8 @@ bool ServiceUtils::Log(string LogContent, size_t LogType)
 		return false;
 	}
 
-	size_t loglevel = 2000;
-	if (m_LogLevel == 2)
-		loglevel = 3000;
-	if (m_LogLevel > 2)
-		loglevel = 10000;
-
-	if (LogType > loglevel)
+	// Log those with equal or lower level of severity
+	if (Severity > m_Severity)
 		return false;
 
 	struct timeval tv;
@@ -907,11 +963,11 @@ bool ServiceUtils::Log(string LogContent, size_t LogType)
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
-	m_buf.len = LogContent.length() + sizeof(LogType) + 1;
+	m_buf.len = LogContent.length() + sizeof(Severity) + 1;
 	m_buf.type = CMD_LOG;
 
-	memcpy(m_buf.mText, &LogType, sizeof(LogType));
-	memcpy(m_buf.mText + sizeof(LogType), LogContent.c_str(), LogContent.length() + 1);
+	memcpy(m_buf.mText, &Severity, sizeof(Severity));
+	memcpy(m_buf.mText + sizeof(Severity), LogContent.c_str(), LogContent.length() + 1);
 	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
 	{
 		m_err = 0;
@@ -922,6 +978,12 @@ bool ServiceUtils::Log(string LogContent, size_t LogType)
 	m_err = errno;
 	return false;
 };
+
+// Send a log to main with severe level 4
+bool ServiceUtils::Log(string LogContent)
+{
+	return Log(LogContent, 4);
+}
 
 // assign *p to store the variable queried from the database with length len, len=0 for string
 bool ServiceUtils::LocalMap(string keyword, void *p, char len)
@@ -940,7 +1002,7 @@ bool ServiceUtils::LocalMap(string keyword, void *p, char len)
 			{
 				m_err = -11;
 				Log("Error. Data type of " + keyword + " from the main module is of " + to_string(m_pptr[i]->len) \
-					+ ". Not identical to " + to_string(len) + " . Total properties is " + to_string(m_TotalProperties), -m_err);
+					+ ". Not identical to " + to_string(len) + " . Total properties is " + to_string(m_TotalProperties), 1);
 				return false;
 			}
 
@@ -957,7 +1019,7 @@ bool ServiceUtils::LocalMap(string keyword, void *p, char len)
 
 	if (m_TotalProperties >= 255) // new keyword
 	{
-		Log("Error. Too many properties are added. Total properties is " + to_string(m_TotalProperties), 102);
+		Log("Error. Too many properties are added. Total properties is " + to_string(m_TotalProperties), 2);
 		return false;
 	}
 
@@ -966,7 +1028,7 @@ bool ServiceUtils::LocalMap(string keyword, void *p, char len)
 	m_pptr[m_TotalProperties]->len = len;
 	m_pptr[m_TotalProperties]->ptr = p;
 	m_TotalProperties++;
-	Log("Added " + keyword + " to the keywords list. Total properties is " + to_string(m_TotalProperties), 1000);
+	Log("Added " + keyword + " to the keywords list. Total properties is " + to_string(m_TotalProperties));
 	return true;
 }
 
@@ -1001,7 +1063,7 @@ bool ServiceUtils::AddToServiceData(string keyword, void *p, char len)
 				m_err = -11;
 				Log("Error. " + keyword + " specified before is of type/length " + to_string(m_pptr[i]->len) \
 					+ ". It is not identical to new value " + to_string(len) 
-					+ " . Total elements in service data  is " + to_string(m_TotalServiceDataElements), -m_err);
+					+ " . Total elements in service data  is " + to_string(m_TotalServiceDataElements), 1);
 				return false;
 			}
 
@@ -1012,7 +1074,7 @@ bool ServiceUtils::AddToServiceData(string keyword, void *p, char len)
 	{
 		m_err = -102;
 		Log("Error. Too many elements are added to the service data. Total elements is now "
-			+ to_string(m_TotalServiceDataElements), -m_err);
+			+ to_string(m_TotalServiceDataElements), 1);
 		return false;
 	}
 
@@ -1020,7 +1082,7 @@ bool ServiceUtils::AddToServiceData(string keyword, void *p, char len)
 	m_ServiceDataElements[m_TotalServiceDataElements].keyword = keyword;
 	m_ServiceDataElements[m_TotalServiceDataElements].len = len;
 	m_ServiceDataElements[m_TotalServiceDataElements].ptr = p;
-	Log("Added " + keyword + " to the service data. Total elements in the list is " + to_string(m_TotalProperties), 1000);
+	Log("Added " + keyword + " to the service data. Total elements in the list is " + to_string(m_TotalProperties));
 	return true;
 }
 

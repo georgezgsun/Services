@@ -1,4 +1,3 @@
-//#include <QCoreApplication>
 #include <ctime>
 #include <chrono>
 #include <iostream>
@@ -8,6 +7,20 @@
 #include "ServiceUtils.h"
 
 using namespace std;
+
+class MainModule : public ServiceUtils
+{
+public:
+
+	MainModule()
+	{
+	};
+
+	bool AddService(string Title, long Channel)
+	{
+
+	};
+};
 
 string getDateTime(time_t tv_sec, time_t tv_usec)
 {
@@ -39,7 +52,7 @@ int main(int argc, char *argv[])
 	pid_t pid;
 	pid_t ppid;
 	string sTitle;
-	size_t logType;
+	char LogSeverity(2);
 	string logContent;
 	struct timeval tv;
 
@@ -84,6 +97,7 @@ int main(int argc, char *argv[])
 	launcher->LocalMap("Luanguage", &Luanguage, 0);
 	launcher->LocalMap("Active Triggers", &ActiveTriggers, 0);
 	launcher->LocalMap("Auto upload", &AutoUpload);
+	launcher->LocalMap("SeverityLevel", &LogSeverity, 1);
 
 	// Simulate the main module/head working
 	while (1)
@@ -126,16 +140,16 @@ int main(int argc, char *argv[])
 			// send back the service list first
 			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
 
-			// send back the database properties at the end
+			// send back the database properties at the end ??
 			launcher->ServiceQuery(to_string(launcher->m_MsgChn));
 			break;
 
 		case CMD_LOG:
 			offset = 0;
-			memcpy(&logType, bufMsg, sizeof(logType));
-			logContent.assign(bufMsg + sizeof(logType));
+			memcpy(&LogSeverity, bufMsg, sizeof(LogSeverity));
+			logContent.assign(bufMsg + sizeof(LogSeverity));
 			cout << currentDateTime << " : LOG from channel " << launcher->m_MsgChn 
-				<< " on " << tmp << ", [" << logType << "] " << logContent  << endl;
+				<< " on " << tmp << ", [" << LogSeverity << "] " << logContent  << endl;
 			break;
 
 		case CMD_DATABASEQUERY:
@@ -147,7 +161,7 @@ int main(int argc, char *argv[])
 			break;
 
 		case CMD_WATCHDOG:
-			//cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
+			cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
 		case CMD_STRING:

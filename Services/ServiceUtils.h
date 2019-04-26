@@ -1,7 +1,4 @@
 #pragma once
-#ifndef SERVICEUTILS_H
-#define SERVICEUTILS_H
-
 
 #include <string>
 
@@ -74,10 +71,12 @@ protected:
 
 	long m_WatchdogTimer[255];  // Store the watchdog timers
 
+	bool ReSendMsgTo(long ServiceChannel);
+
 private:
 	string m_Title;  // The title of this channel
 	size_t m_HeaderLength;  // The header length of message
-	size_t m_LogLevel; // The level of the log;  Level 1 for 1-1999; level 2 for 1-2999; level 3 for 1-3999;
+	char m_Severity; // The level of the log;  1-critical, 2-error, 3-warning, 4-infomation, 5-debug, 6-verbose;
 	key_t m_Key;  // The key of the message queue
 
 public:
@@ -87,6 +86,7 @@ public:
 	long m_MsgTS_sec; // the time stamp in seconds of latest receiving message
 	long m_MsgTS_usec; // the micro seconds part of the time stamp of latest receiving message
 
+	ServiceUtils();
 	ServiceUtils(int argc, char *argv[]); // Define specified message queue
 	~ServiceUtils();
 
@@ -99,16 +99,17 @@ public:
 	bool SndCmd(string msg, string ServiceTitle); // Send a command in string to specified service provider
 	bool SndMsg(void *p, size_t type, size_t len, long ServiceChannel); // Send a packet with given length to specified service provider with channel
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
-	bool UpdateServiceData(); // update and broadcast the service data if any member changed
+	bool UpdateServiceData(); // update and broadcast the service data if any data are changed
 
 	size_t ChkNewMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
-	string GetRcvMsg(); // receive a text message from sspecified ervice provider, like GPS, RADAR, TRIGGER. Not Autoreply.
+	string GetRcvMsg(); // receive a text message from specified service provider, like GPS, RADAR, TRIGGER.
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
-	size_t WatchdogFeed(); // Feed the dog at watchdog main module
-	bool Log(string logContent, size_t logType); // Send a log to log main module
+	size_t WatchdogFeed(); // smart feed the watchdog in main module
+	bool Log(string logContent, char Severity); // Send a log to log main module. It is controlled by log level
+	bool Log(string logContent); // Send a log to log main module. Severe level of this log is set to default value 4 normal
 
-	bool LocalMap(string keyword, void *p, char len); // assign *p with length len (0 for string) to be one of the local property, function in database actions and messages
+	bool LocalMap(string keyword, void *p, char len); // map local *p with length len (0 for string) to be one of the local property, function in database actions and messages
 	bool LocalMap(string keyword, string *s); // assign string *s to be one of the local property, function in database actions and messages
 	bool LocalMap(string keyword, int *n); // assign *n to to be one of the local property, function in database actions and messages
 
@@ -119,5 +120,3 @@ public:
 	bool dbQuery(); // query the database. The result will be placed in variables linked to the keyword before.
 	bool dbUpdate(); // update the database with variables linked to the keyword before.
 };
-
-#endif // SERVICEUTILS_H
