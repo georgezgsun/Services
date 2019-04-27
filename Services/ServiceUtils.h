@@ -14,6 +14,7 @@
 #define CMD_QUERY 10
 #define CMD_SERVICEDATA 11
 #define CMD_COMMAND 12
+#define CMD_STATUS 13
 #define CMD_STRING 32
 #define CMD_INTEGER 33
 

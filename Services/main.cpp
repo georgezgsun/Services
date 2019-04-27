@@ -16,10 +16,27 @@ public:
 	{
 	};
 
-	bool AddService(string Title, long Channel)
+	bool AddAService(string Title, long Channel)
 	{
+		if (Channel <= 0 || Channel > 255)
+		{
+			m_err = -1;
+			return false;
+		}
 
+		m_err = 0;
+		m_ServiceTitles[m_TotalServices] = Title;
+		m_ServiceChannels[m_TotalServices] = Channel;
+		return true;
 	};
+
+	bool RequestModuleStatus()
+	{
+		SndMsg(NULL, CMD_COMMAND, 0, m_ServiceChannels[0]);
+		for (size_t i = 1; i < m_TotalServices; i++)
+			ReSendMsgTo(m_ServiceChannels[i]);
+		return true;
+	}
 };
 
 string getDateTime(time_t tv_sec, time_t tv_usec)

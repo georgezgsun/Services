@@ -870,6 +870,58 @@ size_t ServiceUtils::ChkNewMsg()
 		case CMD_COMMAND:
 			return m_buf.type; // return when get a command. No more auto parse
 
+		case CMD_STATUS:
+			if (m_MsgChn != 1)
+				return m_buf.type; // do not report status
+	
+			offset = 0;
+			struct timeval tv;
+			gettimeofday(&tv, nullptr);
+			m_buf.rChn = 1; // always report to main
+			m_buf.sChn = m_Chn;
+			m_buf.sec = tv.tv_sec;
+			m_buf.usec = tv.tv_usec;
+			m_buf.len = 0; // temperal value
+			m_buf.type = CMD_STATUS;
+
+			
+			strcpy(m_buf.mText + offset, "TotalSent");
+			offset += 10;
+			memcpy(m_buf.mText + offset, &m_TotalMessageSent, sizeof(m_TotalMessageSent));
+			offset += sizeof(m_TotalMessageSent);
+
+			strcpy(m_buf.mText + offset, "TotalReceived");
+			offset += 14;
+			memcpy(m_buf.mText + offset, &m_TotalMessageReceived, sizeof(m_TotalMessageReceived));
+			offset += sizeof(m_TotalMessageReceived);
+
+			strcpy(m_buf.mText + offset, "Subscriptions");
+			offset += 14; // length of Subscriptions\0
+			for (size_t i = 0; i < m_TotalSubscriptions; i++)
+				m_buf.mText[offset++] = m_Subscriptions[i];
+
+			if (offset + 8 + m_TotalClients > 255)
+			{
+				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+				{
+					m_err = 0;
+					m_TotalMessageSent++;
+					m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+					offset = 0;
+				}
+				else
+				{
+					m_err = errno;
+					return m_buf.type;
+				}
+			}
+
+			strcpy(m_buf.mText + offset, "Clients");
+			offset += 8; // length of Clients\0
+			for (size_t i = 0; i < m_TotalClients; i++)
+				m_buf.mText[offset++] = m_Clients[i];
+			break;
+
 		default:
 			m_err = -50;
 			Log("Error! Unkown command " + to_string(m_buf.type) + " from " + to_string(m_buf.sChn), 1);
