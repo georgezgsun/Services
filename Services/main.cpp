@@ -16,6 +16,9 @@ public:
 
 	MainModule()
 	{
+		m_AutoSleep = true;  // Auto sleep is also enabled in main
+		m_AutoUpdate = false; // No auto update for service data in main. The m_ServiceData is reused by service list
+		m_AutoWatchdog = false; // No auto watchdog feed at main
 	};
 
 	// used to store the index of database elements for each sub module 
@@ -60,6 +63,10 @@ public:
 		m_ServiceChannels[m_TotalServices] = Channel;
 		m_TotalDBElements[m_TotalServices] = 0;
 		m_TotalServices++;
+
+		m_ServiceData[m_ServiceDataLength++] = Channel & 0xFF;
+		strcpy(m_ServiceData + m_ServiceDataLength, Title.c_str());
+		m_ServiceDataLength += Title.length() + 1;
 		return true;
 	};
 
@@ -177,15 +184,8 @@ public:
 		m_buf.usec = tv.tv_usec;
 		m_buf.type = CMD_LIST;
 
-		size_t offset = 0;
-		for (size_t i = 0; i < m_TotalServices; i++)
-		{
-			m_buf.mText[offset++] = m_ServiceChannels[i] & 0xFF;
-			strcpy(m_buf.mText + offset, m_ServiceTitles[i].c_str());
-			offset += m_ServiceTitles[i].length() + 1;
-		}
-		m_buf.len = offset;
-
+		memcpy(m_buf.mText, m_ServiceData, m_ServiceDataLength);
+		m_buf.len = m_ServiceDataLength;
 		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 		{
 			m_err = errno;
