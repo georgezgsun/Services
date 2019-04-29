@@ -73,9 +73,18 @@ public:
 	// Let each sub module report its message status
 	bool RequestModuleStatus()
 	{
-		SndMsg(NULL, CMD_COMMAND, 0, m_ServiceChannels[0]);
-		for (size_t i = 1; i < m_TotalServices; i++)
-			ReSendMsgTo(m_ServiceChannels[i]);
+		// The main informs every sub module that the service on the Channel has down
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		m_buf.rChn = 1;
+		m_buf.sChn = m_Chn;
+		m_buf.sec = tv.tv_sec;
+		m_buf.usec = tv.tv_usec;
+		m_buf.len = 0; // temporal assigned to 0
+		m_buf.type = CMD_STATUS;
+
+		for (size_t i = 0; i < m_TotalClients; i++)
+			ReSendMsgTo(m_Clients[i]);
 		return true;
 	}
 
@@ -253,10 +262,13 @@ public:
 
 	size_t CheckWatchdog()
 	{
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+
 		for (size_t i = 1; i < m_TotalServices; i++)
 		{
 			size_t index = m_ServiceChannels[i];
-			if (m_WatchdogTimer[index] > 0 && m_buf.sec >= m_WatchdogTimer[index] + 5)
+			if (m_WatchdogTimer[index] > 0 && tv.tv_sec >= m_WatchdogTimer[index] + 5)
 			{
 				m_WatchdogTimer[index] = 0;
 				return index;
@@ -283,33 +295,36 @@ int main(int argc, char *argv[])
 	string tmp;
 	string currentDateTime;
 
-	string serviceTitles[5] = { "MAIN", "GPS", "Radar", "Trigger", "FrontCam" };
-	char serviceChannels[5] = { 1,3,4,5,19 };
+	string serviceTitles[5] { "MAIN", "GPS", "Radar", "Trigger", "FrontCam" };
+	char serviceChannels[5] { 1,3,4,5,19 };
+	string sSeverity[6] { "Critical", "Error", "Warning", "Info", "Debug", "Verbose"};
 
 	char *bufMsg;
 	size_t typeMsg;
 	size_t len = 0;
 	size_t chn = 0;
-	size_t offset = 0;
+	size_t offset{ 0 };
 	pid_t pid;
 	pid_t ppid;
 	string sTitle;
-	char LogSeverity(4);
+	char LogSeverity{ 4 };
 	char Severity;
 	string logContent;
 	struct timeval tv;
 
-	int PreEvent = 120;
-	int PreEvent2 = 45;
-	int Chunk = 30;
-	string CamPath("rtsp://10.25.20.0/1/h264major");
-	string User("Mark Richman");
+	int PreEvent{ 120 };
+	int PreEvent2{ 45 };
+	int Chunk{ 30 };
+	string CamPath{ "rtsp://10.25.20.0/1/h264major" };
+	string User{ "Mark Richman" };
 	string Password("noPassword");
-	string CloudServer("50.24.54.54");
-	int WAP = 1;
-	string Luanguage("English");
-	string ActiveTriggers("FLB SRN MIC LSB RLB");
-	int AutoUpload = 0;
+	string CloudServer{ "50.24.54.54" };
+	int WAP{ 1 };
+	string Luanguage{ "English" };
+	string ActiveTriggers{ "FLB SRN MIC LSB RLB" };
+	int AutoUpload{ 0 };
+	size_t totalReceived{ 0 };
+	size_t totalSent{ 0 };
 
 	MainModule *launcher = new MainModule();
 	if (!launcher->StartService())
@@ -318,6 +333,8 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	cout << endl << "main module starts. Waiting for clients to join...." << endl;
+
+	//launcher->SndCmd("LogSeverityLevel=3", "1");
 
 	launcher->LocalMap("PreEvent", &PreEvent);
 	launcher->LocalMap("PreExent", &PreEvent2);
@@ -343,15 +360,14 @@ int main(int argc, char *argv[])
 
 	launcher->AddDBElement("WAP", 5);
 
-	launcher->SndCmd("LogSeverityLevel=5", "1");
+	// These settings will take effect only after ChkNewMsg
+	launcher->SndCmd("LogSeverityLevel=Verbose", "1");
 	launcher->SndCmd("AutoWatchdog=off", "1");
 	launcher->SndCmd("AutoUpdate=on", "1");
 
 	// Simulate the main module/head working
 	while (1)
 	{
-		gettimeofday(&tv, nullptr);
-
 		// check the watch dog
 		chn = launcher->CheckWatchdog();
 		if (chn)
@@ -359,6 +375,7 @@ int main(int argc, char *argv[])
 			cout << getDateTime(tv.tv_sec, tv.tv_usec) 
 				<< " : Watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
+			continue;
 		}
 
 		// check if there is any new message sent to main module. These messages are not auto processed by the library.
@@ -366,6 +383,7 @@ int main(int argc, char *argv[])
 		if (!typeMsg)
 			continue;
 		len = launcher->GetRcvMsgBuf(&bufMsg);
+		string keyword;
 
 		// get the current time
 		gettimeofday(&tv, nullptr);
@@ -375,7 +393,6 @@ int main(int argc, char *argv[])
 		switch (typeMsg)
 		{
 		case CMD_ONBOARD:
-
 			memcpy(&pid, bufMsg, sizeof(pid));
 			offset = sizeof(pid);
 			memcpy(&ppid, bufMsg + offset, sizeof(ppid));
@@ -385,7 +402,7 @@ int main(int argc, char *argv[])
 			// Reply service list to sub-module after
 			launcher->ReplyServiceList();
 
-			launcher->SndCmd("LogSeverityLevel=5", launcher->GetServiceTitle(launcher->m_MsgChn));
+			launcher->SndCmd("LogSeverityLevel=4", launcher->GetServiceTitle(launcher->m_MsgChn));
 
 			//launcher->Log("Service module " + launcher->GetServiceTitle(launcher->m_MsgChn) + " gets onboard at channel "
 			//	+ to_string(launcher->m_MsgChn));
@@ -408,9 +425,9 @@ int main(int argc, char *argv[])
 			logContent.assign(bufMsg + sizeof(LogSeverity));
 			
 			if (LogSeverity >= Severity)
-				cout << currentDateTime << " logs [" << +Severity << "] " << logContent << endl;
+				cout << currentDateTime << " logs [" << sSeverity[Severity] << "] " << logContent << endl;
 			else
-				cout << currentDateTime << " ignores logs [" << +Severity << "]" << endl;
+				cout << currentDateTime << " ignores logs [" << sSeverity[Severity] << "]" << endl;
 			break;
 
 		case CMD_DATABASEQUERY:
@@ -432,6 +449,8 @@ int main(int argc, char *argv[])
 			break;
 
 		case CMD_DOWN:
+			launcher->RequestModuleStatus();
+
 			// broadcast the message that one channel has down
 			launcher->InformDown(launcher->m_MsgChn);
 
@@ -440,9 +459,79 @@ int main(int argc, char *argv[])
 				cout << currentDateTime << " : reports down. Informs every modules." << endl;
 			break;
 
+			// Auto parse the system configurations
+		case CMD_COMMAND:
+			msg.assign(bufMsg);
+			launcher->Log("Get a command '" + msg + "' from " + launcher->GetServiceTitle(launcher->m_MsgChn));
+			break;
+
+		case CMD_STATUS:
+			offset = 0;
+			totalReceived = 0;
+			totalSent = 0;
+
+			cout << currentDateTime << " : reports status \n";
+
+			// total messages sent
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = ";
+			memcpy(&len, bufMsg + offset, sizeof(len));
+			offset += sizeof(len);
+			cout << len << endl;
+			totalSent += len;
+
+			// total messages received
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = ";
+			memcpy(&len, bufMsg + offset, sizeof(len));
+			offset += sizeof(len);
+			cout << len << endl;
+			totalReceived += len;
+
+			// total database elements
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = ";
+			memcpy(&len, bufMsg + offset, sizeof(len));
+			offset += sizeof(len);
+			cout << len << endl;
+
+			// status
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = " << +bufMsg[offset++] << +bufMsg[offset++] << +bufMsg[offset++] << +bufMsg[offset++];
+			offset++;
+			cout << endl;
+
+			// subscriptions
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = ";
+			msg.assign(bufMsg + offset);
+			len = msg.length();
+			for (size_t i = 0; i < len; i++)
+				cout << +bufMsg[offset + i] << " ";
+			offset += len + 1;
+			cout << endl;
+
+			// clients
+			msg.assign(bufMsg + offset);
+			offset += msg.length() + 1;
+			cout << msg << "(" << +bufMsg[offset++] << ") = ";
+			msg.assign(bufMsg + offset);
+			len = msg.length();
+			for (size_t i = 0; i < len; i++)
+				cout << +bufMsg[offset + i] << " ";
+			offset += len + 1;
+			cout << endl;
+
+			break;
+
 		default:
 			if (LogSeverity >= 3)
-				cout << currentDateTime << " : sends a message '" << launcher->GetRcvMsg() << "' with type of " 
+				cout << currentDateTime << " gets a message '" << launcher->GetRcvMsg() << "' with type of " 
 				<< typeMsg << " and length of " << len << " at " << tmp << endl;
 		}
 	}

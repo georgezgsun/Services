@@ -67,16 +67,16 @@ protected:
 	long m_TotalMessageReceived;
 	Property *m_pptr[255]; // Pointer to the Properties of theis module
 
-	size_t m_TotalDataBaseElements;  // store total elements get from database
+	size_t m_TotalDatabaseElements;  // store total elements get from database
 	size_t m_IndexdbElements[255];  // store the index of database elements in Properties
 
 	long m_WatchdogTimer[255];  // Store the watchdog timers
 
 	size_t m_HeaderLength;  // The header length of message
-	int m_Severity; // The level of the log;  1-critical, 2-error, 3-warning, 4-infomation, 5-debug, 6-verbose;
+	int m_Severity; // The level of the log;  1-Critical, 2-Error, 3-Warning, 4-Normal, 5-Debug, 6-Verbose;
 	bool m_AutoUpdate;  // Enable service data been auto updated during ChkNewMsg
 	bool m_AutoWatchdog; // Enable watchdog been auto feed during ChkNewMsg
-	long m_AutoSleep;  // Enable auto sleep during ChkNewMsg
+	bool m_AutoSleep;  // Enable auto sleep during ChkNewMsg
 
 	bool ReSendMsgTo(long ServiceChannel);
 

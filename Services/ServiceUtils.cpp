@@ -30,7 +30,7 @@ ServiceUtils::ServiceUtils()
 	m_err = m_ID == -1 ? -3 : 0;
 
 	m_TotalClients = 0;
-	m_TotalDataBaseElements = 0;
+	m_TotalDatabaseElements = 0;
 	m_TotalMessageReceived = 0;
 	m_TotalMessageSent = 0;
 	m_TotalProperties = 0;
@@ -91,7 +91,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_err = m_ID == -1 ? -3 : 0;
 
 	m_TotalClients = 0;
-	m_TotalDataBaseElements = 0;
+	m_TotalDatabaseElements = 0;
 	m_TotalMessageReceived = 0;
 	m_TotalMessageSent = 0;
 	m_TotalProperties = 0;
@@ -128,12 +128,10 @@ bool ServiceUtils::StartService()
 	{
 		// Read off all previous messages in the queue at main module starts
 		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), 0, IPC_NOWAIT) > 0)
-		{
 			count++;
-		}
 
-		if (m_Severity >= 5)
-			printf("(Debug) There are %d stale messages in main module's message queue.\n", count);
+		// For debug only
+		Log("There are " + to_string(count) + " stale messages in main module's message queue.", 5);
 		m_err = 0;
 		return true;
 	}
@@ -145,7 +143,10 @@ bool ServiceUtils::StartService()
 
 		// Read off all messages to me in the queue before I startup
 		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT) > 0)
+		{
 			count++;
+			m_TotalMessageReceived++;
+		}
 
 		// Report onboard to the main module
 		strcpy(txt, m_Title.c_str());
@@ -210,8 +211,6 @@ bool ServiceUtils::SndCmd(string msg, string ServiceTitle)
 		m_err = -2; // Cannot find the ServiceTitle in the list
 		return false;
 	}
-	//if (m_Chn == m_buf.rChn) // do not send messages to itself
-	//	return false;
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
@@ -334,6 +333,9 @@ bool ServiceUtils::ServiceSubscribe(string ServiceTitle)
 		return false;
 	}
 
+	if (m_Chn == 1)
+		return false; // No service subscribe for the main module
+
 	if (!SndMsg(nullptr, CMD_SUBSCRIBE, 0, ServiceChannel))
 	{
 		m_err = -2;
@@ -362,6 +364,9 @@ bool ServiceUtils::ServiceQuery(string ServiceTitle)
 		return false;
 	}
 
+	if (m_Chn == 1)
+		return false; // No service query for the main module
+
 	long Chn = GetServiceChannel(ServiceTitle);
 	if (!Chn)
 	{
@@ -381,6 +386,9 @@ bool ServiceUtils::UpdateServiceData()
 		m_err = -1;  // Message queue has not been opened
 		return false;
 	}
+
+	if (m_Chn == 1)
+		return false; // No service data update for the main module
 
 	// broadcast the updated service data
 	struct timeval tv;
@@ -426,16 +434,8 @@ bool ServiceUtils::UpdateServiceData()
 	for (size_t i = 0; i < m_TotalClients; i++)
 		if (!ReSendMsgTo(m_Clients[i]))
 			return false;
-		//{
-		//	m_buf.rChn = m_Clients[i];
-		//	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
-		//	{
-		//		m_err = errno;
-		//		return false;
-		//	}
-		//	m_TotalMessageSent++;
-		//}
 
+	Log("The service date get auto updated and broadcasted.", 5);
 	m_err = 0;
 	return true;
 }; // Multicast the data stored at *p with m_ServiceDataLength and send it to every subscriber
@@ -469,16 +469,17 @@ size_t ServiceUtils::ChkNewMsg()
 		m_err = static_cast<int>(l);
 		if (l < 0)
 		{
+			// Auto update the service data if enabled
 			if (m_AutoUpdate)
 				UpdateServiceData();
 
+			// Auto feed the watchdog if enabled.
 			if (m_AutoWatchdog)
+				WatchdogFeed();
 
-			// To sleep for a short period of time to reduce the CPU usage. 
-			// The default value 1ms. It can be set in CMD_COMMAND. 0 means no sleep.
+			// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
 			if (m_AutoSleep)
 				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
-
 
 			return 0;
 		}
@@ -496,7 +497,11 @@ size_t ServiceUtils::ChkNewMsg()
 		if (m_Chn == 1)
 		{
 			m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; // set the watchdog timer for that channel
-			return m_buf.type;
+			if (type == CMD_ONBOARD)
+				m_Clients[m_TotalClients++] = m_MsgChn;
+
+			if (type != CMD_COMMAND) // auto parse the CMD_COMMAND for main
+				return m_buf.type;  
 		}
 
 		// no auto reply for those normal receiving. type < 31 commands; 32 is string. 33 is integer. anything larger are user defined types
@@ -635,13 +640,13 @@ size_t ServiceUtils::ChkNewMsg()
 				}
 
 				size_t j;
-				for (j = 0; j <m_TotalDataBaseElements; j++)
+				for (j = 0; j <m_TotalDatabaseElements; j++)
 					if (i == m_IndexdbElements[j])
 						break;
  
 				// Add the element to the database element list if it does not appear before
-				if (j >= m_TotalDataBaseElements)
-					m_IndexdbElements[m_TotalDataBaseElements++] = i;
+				if (j >= m_TotalDatabaseElements)
+					m_IndexdbElements[m_TotalDatabaseElements++] = i;
 			} while (offset < 255);
 			break; // continue to read next message
 
@@ -794,23 +799,42 @@ size_t ServiceUtils::ChkNewMsg()
 			m_buf.usec = tv.tv_usec;
 			m_buf.len = 0; // temperal value
 			m_buf.type = CMD_STATUS;
-
 			
 			strcpy(m_buf.mText + offset, "TotalSent");
 			offset += 10;
+			m_buf.mText[offset++] = sizeof(m_TotalMessageSent);
 			memcpy(m_buf.mText + offset, &m_TotalMessageSent, sizeof(m_TotalMessageSent));
 			offset += sizeof(m_TotalMessageSent);
 
 			strcpy(m_buf.mText + offset, "TotalReceived");
 			offset += 14;
+			m_buf.mText[offset++] = sizeof(m_TotalMessageReceived);
 			memcpy(m_buf.mText + offset, &m_TotalMessageReceived, sizeof(m_TotalMessageReceived));
 			offset += sizeof(m_TotalMessageReceived);
 
+			strcpy(m_buf.mText + offset, "dbElements");
+			offset += 11;
+			m_buf.mText[offset++] = sizeof(m_TotalDatabaseElements);
+			memcpy(m_buf.mText + offset, &m_TotalDatabaseElements, sizeof(m_TotalDatabaseElements));
+			offset += sizeof(m_TotalDatabaseElements);
+
+			strcpy(m_buf.mText + offset, "States");
+			offset += 7;
+			m_buf.mText[offset++] = 0; // it is a string
+			m_buf.mText[offset++] = m_Severity & 0xFF;
+			m_buf.mText[offset++] = m_AutoUpdate ? 1 : 0;
+			m_buf.mText[offset++] = m_AutoWatchdog ? 1 : 0;
+			m_buf.mText[offset++] = m_AutoSleep ? 1 : 0;
+			m_buf.mText[offset++] = 0; // end of the string
+
 			strcpy(m_buf.mText + offset, "Subscriptions");
 			offset += 14; // length of Subscriptions\0
+			m_buf.mText[offset++] = 0; // 0 represents a string
 			for (size_t i = 0; i < m_TotalSubscriptions; i++)
 				m_buf.mText[offset++] = m_Subscriptions[i] & 0xFF;
+			m_buf.mText[offset++] = 0; // add 0 at the end of a string
 
+			m_buf.len = offset;
 			if (offset + 8 + m_TotalClients > 255)
 			{
 				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
@@ -829,8 +853,24 @@ size_t ServiceUtils::ChkNewMsg()
 
 			strcpy(m_buf.mText + offset, "Clients");
 			offset += 8; // length of Clients\0
+			m_buf.mText[offset++] = 0;  // 0 represents a string
 			for (size_t i = 0; i < m_TotalClients; i++)
 				m_buf.mText[offset++] = m_Clients[i];
+			m_buf.mText[offset++] = 0; // add 0 at the end of a string
+
+			m_buf.len = offset;
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+			{
+				m_err = errno;
+				return m_buf.type;
+			}
+			else
+			{
+				m_err = 0;
+				m_TotalMessageSent++;
+				m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+				offset = 0;
+			}
 			break;
 
 		default:
@@ -852,6 +892,9 @@ bool ServiceUtils::WatchdogFeed()
 		m_err = -1;
 		return 0;
 	}
+
+	if (m_Chn == 1)
+		return false; // No watchdog feed for the main module
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
@@ -1041,6 +1084,9 @@ bool ServiceUtils::AddToServiceData(string keyword, int *n)
 // Send a request to database main module to query for the value of keyword. The results will sent back automatically by main module.
 bool ServiceUtils::dbQuery()
 {
+	if (m_Chn == 1)
+		return false; // No database query for the main module
+
 	return SndMsg(nullptr, CMD_DATABASEQUERY, 0, 1);
 };
 
@@ -1055,6 +1101,9 @@ bool ServiceUtils::dbUpdate()
 		return false;
 	}
 
+	if (m_Chn == 1)
+		return false; // No database update for the main module
+
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
 	m_buf.rChn = 1; // always sends to main module
@@ -1066,7 +1115,7 @@ bool ServiceUtils::dbUpdate()
 
 	size_t offset = 0;
 	size_t i;
-	for (size_t j = 0; j < m_TotalDataBaseElements; j++)
+	for (size_t j = 0; j < m_TotalDatabaseElements; j++)
 	{
 		i = m_IndexdbElements[j];
 		size_t len = m_pptr[i]->keyword.length() + 2;
@@ -1137,7 +1186,7 @@ long ServiceUtils::GetServiceChannel(string serviceTitle)
 
 string ServiceUtils::GetServiceTitle(long serviceChannel)
 {
-	// return service title of myself
+	// return service title of myself for 0
 	if (!serviceChannel)
 		return m_Title;
 
