@@ -22,7 +22,12 @@ ServiceUtils::ServiceUtils()
 
 	m_Chn = 1;
 	m_Key = getpid();
+	m_Key = 12345; // for debug purpose 
 	m_Title.assign("MAIN");
+
+	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
+	printf("(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
+	m_err = m_ID == -1 ? -3 : 0;
 
 	m_TotalClients = 0;
 	m_TotalDataBaseElements = 0;
@@ -32,7 +37,10 @@ ServiceUtils::ServiceUtils()
 	m_TotalServiceDataElements = 0;
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
-	m_Severity = 4;
+	m_Severity = 4;  // Information
+	m_AutoUpdate = true;  // Enable service data auto update by default
+	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
+	m_AutoSleep = true; // Enable auto sleep by default
 
 	memset(m_Clients, 0, sizeof(m_Clients));
 	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
@@ -91,6 +99,9 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
 	m_Severity = 4;
+	m_AutoUpdate = true;  // Enable service data auto update by default
+	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
+	m_AutoSleep = true; // Enable auto sleep by default
 
 	memset(m_Clients, 0, sizeof(m_Clients));
 	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
@@ -120,7 +131,9 @@ bool ServiceUtils::StartService()
 		{
 			count++;
 		}
-		printf("(Debug) There are %d stale messages in main module's message queue.\n", count);
+
+		if (m_Severity >= 5)
+			printf("(Debug) There are %d stale messages in main module's message queue.\n", count);
 		m_err = 0;
 		return true;
 	}
@@ -132,11 +145,7 @@ bool ServiceUtils::StartService()
 
 		// Read off all messages to me in the queue before I startup
 		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT) > 0)
-		{
 			count++;
-		} 
-		printf("(Debug) Service provider '%s' starts on channel #%ld with PID=%u, PPID=%u. There are %d stale messages for it.\n", 
-			m_Title.c_str(), m_Chn, pid, ppid, count);
 
 		// Report onboard to the main module
 		strcpy(txt, m_Title.c_str());
@@ -146,6 +155,9 @@ bool ServiceUtils::StartService()
 		memcpy(txt + len, &ppid, len);
 		len += sizeof(pid);
 		SndMsg(txt, CMD_ONBOARD, len, 1);
+
+		if (count)
+			Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
 
 		// Get initialization from the main module;
 		count = 5;
@@ -159,7 +171,7 @@ bool ServiceUtils::StartService()
 				return false;
 			}
 		} while (m_TotalServices <= 0);
-		printf("(Debug) Get initialized in %dms.\n", 5 - count);
+		Log(m_Title + " gets initialized in " + to_string(5 - count) + "ms", 4);
 		
 		// Broadcast my onboard messages to all service channels other than the main module and myself
 		for (size_t i = 1; i < m_TotalServices; i++)
@@ -198,8 +210,8 @@ bool ServiceUtils::SndCmd(string msg, string ServiceTitle)
 		m_err = -2; // Cannot find the ServiceTitle in the list
 		return false;
 	}
-	if (m_Chn == m_buf.rChn) // do not send messages to itself
-		return false;
+	//if (m_Chn == m_buf.rChn) // do not send messages to itself
+	//	return false;
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
@@ -210,16 +222,16 @@ bool ServiceUtils::SndCmd(string msg, string ServiceTitle)
 	m_buf.type = CMD_COMMAND;
 
 	strcpy(m_buf.mText, msg.c_str());
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		if (m_buf.rChn == 1)
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-		return true;
+		m_err = errno;
+		return false;
 	}
-	m_err = errno;
-	return false;
+	m_err = 0;
+	m_TotalMessageSent++;
+	if (m_buf.rChn == 1)
+		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+	return true;
 };
 
 // Send a packet with given length to specified service provider
@@ -229,7 +241,7 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, string ServiceTitle)
 	if (Chn)
 		return SndMsg(p, type, len, Chn);
 
-	printf("(Debug) Cannot find %s in the service list.", ServiceTitle.c_str());
+	Log(m_Title + " cannot find " + ServiceTitle + " in the service list while SndMsg().", 4);
 	m_err = -2;
 	return false;
 }
@@ -257,7 +269,7 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 	m_buf.rChn = ServiceChannel;
 	if (m_buf.rChn <= 0)
 	{
-		printf("(Debug) Error. %ld is an invalid service channel. It shall be positive.", ServiceChannel);
+		Log(m_Title + " got an invalid service channel " + to_string(ServiceChannel) + " while SndMsg.", 2);
 		m_err = -2; // Cannot find the ServiceTitle in the list
 		return false;
 	}
@@ -273,18 +285,18 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 	m_buf.type = type;
 
 	memcpy(m_buf.mText, p, m_buf.len);
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		if (ServiceChannel == 1)
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-		return true;
+		printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, len, m_HeaderLength);
+		m_err = errno;
+		return false;
 	}
 
-	printf("(Debug) Error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, len, m_HeaderLength);
-	m_err = errno;
-	return false;
+	m_err = 0;
+	m_TotalMessageSent++;
+	if (ServiceChannel == 1)
+		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+	return true;
 };
 
 // Re-send the message to another service channel, using original settings and buffer
@@ -293,23 +305,23 @@ bool ServiceUtils::ReSendMsgTo(long ServiceChannel)
 	m_buf.rChn = ServiceChannel;
 	if (m_buf.rChn <= 0)
 	{
-		printf("(Debug) Error. %ld is an invalid service channel. It shall be positive.", ServiceChannel);
+		Log(m_Title + " gets an invalid service channel number " + to_string(ServiceChannel) + " in ReSendMsgTo().", 4);
 		m_err = -2; // Cannot find the ServiceTitle in the list
 		return false;
 	}
 
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		if (ServiceChannel == 1)
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-		return true;
+		printf("(Debug) Error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, m_buf.len, m_HeaderLength);
+		m_err = errno;
+		return false;
 	}
 
-	printf("(Debug) Error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, m_buf.len, m_HeaderLength);
-	m_err = errno;
-	return false;
+	m_err = 0;
+	m_TotalMessageSent++;
+	if (ServiceChannel == 1)
+		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+	return true;
 }
 
 //Subscribe the service from the service provider with specified title
@@ -353,77 +365,12 @@ bool ServiceUtils::ServiceQuery(string ServiceTitle)
 	long Chn = GetServiceChannel(ServiceTitle);
 	if (!Chn)
 	{
-		printf("(Debug) Cannot find %s in the service list.", ServiceTitle.c_str());
+		Log(m_Title + " cannot find " + ServiceTitle + " in the service list when querying service.", 4);
 		m_err = -2;
 		return false;
 	}
 
-	// It is a normal query send for clients.
-	if (m_Chn > 1)
-		return SndMsg(nullptr, CMD_QUERY, 0, Chn);
-
-	// The main reply the database query results to the client
-	struct timeval tv;
-	gettimeofday(&tv, nullptr);
-	m_buf.rChn = Chn;
-	m_buf.sChn = m_Chn;
-	m_buf.sec = tv.tv_sec;
-	m_buf.usec = tv.tv_usec;
-	m_buf.len = 0; // temporal assigned to 0
-	m_buf.type = CMD_DATABASEQUERY;
-
-	size_t offset = 0;
-	for (size_t i = 0; i < m_TotalProperties; i++)
-	{
-		size_t len = m_pptr[i]->keyword.length() + 2;
-		len += m_pptr[i]->len ? m_pptr[i]->len : static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
-
-		// send the message if the buffer is full
-		if (offset + len > 255)
-		{
-			m_buf.len = offset;
-			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-			{
-				m_err = errno;
-				return false;
-			};
-
-			m_TotalMessageSent++;
-			offset = 0;
-			m_err = 0;
-		}
-
-		// assign the keyword of the property
-		strcpy(m_buf.mText + offset, m_pptr[i]->keyword.c_str());
-		offset += m_pptr[i]->keyword.length() + 1;
-
-		//assign the length of the property
-		len = m_pptr[i]->len;
-		m_buf.mText[offset++] = m_pptr[i]->len;
-
-		// assign the value of the property
-		if (len)
-		{
-			memcpy(m_buf.mText + offset, m_pptr[i]->ptr, len);
-			offset += len;
-		}
-		else
-		{
-			// A string is different from normal
-			strcpy(m_buf.mText + offset, static_cast<string *>(m_pptr[i]->ptr)->c_str());
-			offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
-		}
-	}
-
-	m_buf.len = offset;
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
-	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		return true;
-	}
-	m_err = errno;
-	return false;
+	return SndMsg(nullptr, CMD_QUERY, 0, Chn);
 }
 
 // broadcast the service data to all clients
@@ -444,31 +391,6 @@ bool ServiceUtils::UpdateServiceData()
 	m_buf.usec = tv.tv_usec;
 	m_buf.type = CMD_SERVICEDATA;
 	m_buf.len = m_ServiceDataLength;
-
-	// The main module will broadcast the message to all live service provider that a channel is down. 
-	if (m_Chn == 1)
-	{
-		m_buf.type = CMD_DOWN;
-		size_t chn;
-		memcpy(m_buf.mText, m_ServiceData, m_ServiceDataLength);
-		memcpy(&chn, m_ServiceData, sizeof(chn));
-		for (size_t i = 0; i < m_TotalServices; i++)
-		{
-			if (i == chn)
-				continue;
-
-			//m_buf.rChn = m_ServiceChannels[i];
-			//if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) != 0)
-			//{
-			//	m_err = errno;
-			//	return false;
-			//}
-			//m_TotalMessageSent++;
-			if (!ReSendMsgTo(m_ServiceChannels[i]))
-				return false;
-		}
-		return true;
-	}
 
 	size_t offset = 0;
 	string keyword;
@@ -536,6 +458,7 @@ size_t ServiceUtils::GetRcvMsgBuf(char **p)
 size_t ServiceUtils::ChkNewMsg()
 {
 	size_t offset = 0;
+	size_t type;
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
 
 	do
@@ -546,8 +469,17 @@ size_t ServiceUtils::ChkNewMsg()
 		m_err = static_cast<int>(l);
 		if (l < 0)
 		{
-			// To sleep for 1ms. This may significantly reduce the CPU usage
-			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
+			if (m_AutoUpdate)
+				UpdateServiceData();
+
+			if (m_AutoWatchdog)
+
+			// To sleep for a short period of time to reduce the CPU usage. 
+			// The default value 1ms. It can be set in CMD_COMMAND. 0 means no sleep.
+			if (m_AutoSleep)
+				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
+
+
 			return 0;
 		}
 		m_TotalMessageReceived++;
@@ -556,89 +488,22 @@ size_t ServiceUtils::ChkNewMsg()
 		m_MsgChn = m_buf.sChn; // the service channel where the message comes
 		m_MsgTS_sec = m_buf.sec; // the time stamp in seconds of latest receiving message
 		m_MsgTS_usec = m_buf.usec;
+		type = m_buf.type;
 		string keyword;
+		string msg;
 
 		// no autoreply for main module
 		if (m_Chn == 1)
 		{
 			m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; // set the watchdog timer for that channel
-			//printf("(Debug) Watchdog timer %d updates to %ld.\n", m_MsgChn, m_WatchdogTimer[m_MsgChn]);
-
-			if (m_buf.type == CMD_ONBOARD)
-			{
-				// keep record for those onboard services in the main module
-				m_ServiceChannels[m_TotalServices] = m_buf.sChn;
-				m_ServiceTitles[m_TotalServices++].assign(m_buf.mText);
-			}
-
-			if (m_buf.type == CMD_DOWN)
-			{
-				// Auto fill the service data with down channel
-				m_ServiceDataLength = sizeof(m_MsgChn);
-				memcpy(m_ServiceData, &m_MsgChn, m_ServiceDataLength);
-			}
-
-			// Automatic parse and map is needed when the service provider reply a database update
-			if (m_buf.type != CMD_DATABASEUPDATE)
-				return m_buf.type;
-
-			// map the updated data from clients to local variables in main module
-			offset = 0;
-			do
-			{
-				keyword.assign(m_buf.mText + offset); // read the keyword
-				offset += keyword.length() + 1; // there is a /0 in the end
-				if (keyword.empty()) // end of assignment when keyword is empty
-					return m_buf.type; 
-
-				char n = m_buf.mText[offset++]; // read data length, 0 represents for string
-				bool keywordMatched = false;
-				size_t i;
-				for (i = 0; i < m_TotalProperties; i++)
-				{
-					// check if the keyword matched
-					if (keyword.compare(m_pptr[i]->keyword) == 0)
-					{
-						// check the len/type matched or not
-						if (n != m_pptr[i]->len)
-						{
-							m_err = -121;
-							printf("Error! %s from channel %d has length of %d, locals is of %d.\n", 
-								m_pptr[i]->keyword.c_str(), m_MsgChn, n, m_pptr[i]->len);
-							return m_buf.type;
-						}
-
-						// type 0 means a string which shall be assigned the value in a different way
-						if (m_pptr[i]->len)
-						{
-							memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
-							offset += n;
-						}
-						else
-						{
-							static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
-							offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
-						}
-						keywordMatched = true;
-						break;  // break for loop
-					}
-				}
-
-				if (!keywordMatched)
-				{
-					m_err = -120;
-					printf("Error! %s from channel %d does not match any local variables.", m_pptr[i]->keyword.c_str(), m_MsgChn);
-				}
-			} while (offset < 255);
-
 			return m_buf.type;
 		}
 
 		// no auto reply for those normal receiving. type < 31 commands; 32 is string. 33 is integer. anything larger are user defined types
-		if (m_buf.type >= 32)
-			return m_buf.type;
+		if (type >= 32)
+			return type;
 
-		switch (m_buf.type)
+		switch (type)
 		{
 		// auto reply for new subscription request
 		case CMD_SUBSCRIBE:
@@ -695,7 +560,8 @@ size_t ServiceUtils::ChkNewMsg()
 				m_ServiceTitles[m_TotalServices].assign(m_buf.mText + offset);
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
 			} while (offset < m_buf.len);
-			printf("Received new services list from the main module. My service title is %s. There are %d services in the list.\n", GetServiceTitle(m_Chn).c_str(), m_TotalServices);
+			Log(m_Title + " received new services list from the main module.  There are " 
+				+ to_string(m_TotalServices) + " services in the list.", 4);
 			break; // continue to read next message
 
 		// auto process the database feedback from the main module
@@ -780,28 +646,21 @@ size_t ServiceUtils::ChkNewMsg()
 			break; // continue to read next message
 
 		// auto process the message that a service is down.
-		// [Service channel]
 		case CMD_DOWN:
-			memcpy(&l, m_buf.mText, sizeof(l)); // l stores the service channel which was down
-			
-			// return CMD_DOWN if it is the command from the main module to let this service down
-			if (m_MsgChn == 1 && m_Chn == l)
-				return m_buf.type;
-
-			// if it is not from the server
-			if (m_MsgChn > 1)
-				l = m_MsgChn;
+			// Return if it is sent to myself
+			if (m_MsgChn == m_Chn)
+				return type;  // return, no more auto parse
 
 			// stop broadcasting service data to that client
 			for (size_t i = 0; i < m_TotalClients; i++)
-				if (m_Clients[i] == l)
+				if (m_Clients[i] == m_MsgChn)
 				{
 					// move later subscriber one step up
 					for (size_t j = i; j < m_TotalClients - 1; j++)
 						m_Clients[j] = m_Clients[j + 1];
 					m_TotalClients--;  // decrease m_TotalClients by 1
 
-					Log("Channel " + to_string(l) + " is down. Stop broadcasting service data to it. Total clients now is " 
+					Log("Channel " + to_string(m_MsgChn) + " is down. Stop broadcasting service data to it. Total clients now is " 
 						+ to_string(m_TotalClients));
 				}
 			break; // continue to read next message
@@ -865,14 +724,66 @@ size_t ServiceUtils::ChkNewMsg()
 				}
 			} while (offset < 255);
 
-			return m_buf.type; // return when get a service data. No more auto parse
+			return type; // return when get a service data. No more auto parse
 
+		// Auto parse the system configurations
 		case CMD_COMMAND:
-			return m_buf.type; // return when get a command. No more auto parse
+			msg.assign(m_buf.mText);
+			offset = msg.find_first_of('=');  // find =
+			keyword = msg.substr(0, offset);  // keyword is left of =
+			msg = msg.substr(offset + 1); // now msg is right of =
+
+			// Update the log severity level
+			if (!keyword.compare("LogSeverityLevel"))
+			{
+				int i = atoi(msg.c_str());
+				if (i > 0 && i < 7)
+					m_Severity = i;
+
+				if (!msg.compare("Normal"))
+					m_Severity = 4;
+
+				if (!msg.compare("Debug"))
+					m_Severity = 5;
+
+				if (!msg.compare("Verbose"))
+					m_Severity = 6;
+				return m_buf.type;
+			}
+
+			// the flag update of auto service data update
+			if (!keyword.compare("AutoUpdate"))
+			{
+				if (msg.compare("on"))
+					m_AutoUpdate = true;
+				if (msg.compare("off"))
+					m_AutoUpdate = false;
+				return m_buf.type;
+			}
+
+			// the flag update of the watchdog auto feed 
+			if (!keyword.compare("AutoWatchdog"))
+			{
+				if (msg.compare("on"))
+					m_AutoWatchdog = true;
+				if (msg.compare("off"))
+					m_AutoWatchdog = false;
+				return m_buf.type;
+			}
+
+			// the flag update of auto sleep
+			if (!keyword.compare("AutoSleep"))
+			{
+				if (msg.compare("on"))
+					m_AutoSleep = true;
+				if (msg.compare("off"))
+					m_AutoSleep = false;
+			}
+			return type; // return when get a command. No more auto parse
 
 		case CMD_STATUS:
 			if (m_MsgChn != 1)
-				return m_buf.type; // do not report status
+				return type; // do not report status
 	
 			offset = 0;
 			struct timeval tv;
@@ -898,21 +809,21 @@ size_t ServiceUtils::ChkNewMsg()
 			strcpy(m_buf.mText + offset, "Subscriptions");
 			offset += 14; // length of Subscriptions\0
 			for (size_t i = 0; i < m_TotalSubscriptions; i++)
-				m_buf.mText[offset++] = m_Subscriptions[i];
+				m_buf.mText[offset++] = m_Subscriptions[i] & 0xFF;
 
 			if (offset + 8 + m_TotalClients > 255)
 			{
-				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+				{
+					m_err = errno;
+					return m_buf.type;
+				}
+				else
 				{
 					m_err = 0;
 					m_TotalMessageSent++;
 					m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
 					offset = 0;
-				}
-				else
-				{
-					m_err = errno;
-					return m_buf.type;
 				}
 			}
 
@@ -925,15 +836,15 @@ size_t ServiceUtils::ChkNewMsg()
 		default:
 			m_err = -50;
 			Log("Error! Unkown command " + to_string(m_buf.type) + " from " + to_string(m_buf.sChn), 1);
-			return m_buf.type;
+			return type;
 		}
 
 	} while (m_err == 0);
-	return m_buf.type;
+	return type;
 }
 
 // Feed the dog at watchdog main module
-size_t ServiceUtils::WatchdogFeed()
+bool ServiceUtils::WatchdogFeed()
 {
 	// Message queue has not been opened
 	if (m_ID == -1)
@@ -951,53 +862,30 @@ size_t ServiceUtils::WatchdogFeed()
 	m_buf.len = 0;
 	m_buf.type = CMD_WATCHDOG;
 
-	// Handle the service provider.
-	if (m_Chn > 1)
+	// feed the watchdog roughly every second
+	if (m_buf.sec == m_WatchdogTimer[m_buf.rChn])
+		return false;
+	if (m_buf.sec == m_WatchdogTimer[m_buf.rChn] + 1 && m_buf.usec < m_WatchdogTimer[0])
+		return false;
+
+	// Send heartbeat message and set new timer threshold
+	if (msgsnd(m_ID, &m_buf, m_HeaderLength, IPC_NOWAIT))
 	{
-		// feed the watchdog roughly every second
-		if (m_buf.sec <= m_WatchdogTimer[m_buf.rChn])
-			return 0;
-
-		// Send heartbeat message and set new timer threshold
-		if (msgsnd(m_ID, &m_buf, m_HeaderLength, IPC_NOWAIT) == 0)
-		{
-			m_err = 0;
-			m_TotalMessageSent++;
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // re-set watchdog timer for that channel
-
-			//UpdateServiceData();  // Automatic update the service data right after watchdog feed
-			return 1;
-		}
-
 		m_err = errno;
-		return 0;
+		return false;
 	}
 
-	// Handle the main module watchdog
-	for (size_t i = 0; i < m_TotalServices; i++)
-	{
-		size_t index = m_ServiceChannels[i];
-		if (m_WatchdogTimer[index] > 0 && m_buf.sec >= m_WatchdogTimer[index] + 5)
-		{
-			//printf("(Debug) Watchdog %d reached at %ld.%6ld, where timer is %ld.\n", index, m_buf.sec, m_buf.usec, m_WatchdogTimer[index]);
-			m_WatchdogTimer[index] = 0;
-			return index;
-		}
-	}
-	return 0;
+	m_err = 0;
+	m_TotalMessageSent++;
+	m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // re-set watchdog timer for that channel
+	m_WatchdogTimer[0] = m_buf.usec; // save the microsecond in [0]
+	return true;
 };
 
 // Send a Log to main module with specified severe level
 // Sending format is [LogType][LogContent]
 bool ServiceUtils::Log(string LogContent, char Severity)
 {
-	// for main module, log is print for debug
-	if (m_Chn == 1)
-	{
-		printf("main module log : [%d] %s\n", Severity, LogContent.c_str());
-		return true;
-	}
-
 	// Message queue has not been opened
 	if (m_ID == -1)
 	{

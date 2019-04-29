@@ -3,6 +3,8 @@
 #include <iostream>
 #include <unistd.h>
 #include <sys/time.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <string.h>
 #include "ServiceUtils.h"
 
@@ -16,6 +18,35 @@ public:
 	{
 	};
 
+	// used to store the index of database elements for each sub module 
+	size_t SubIndex[32][127];
+
+	size_t m_TotalDBElements[127];
+
+	// Add an database keyword in a sub module. This keyword shall be added into the properties before
+	bool AddDBElement(string keyword, long Channel)
+	{
+		size_t i;
+		for (i = 0; i < m_TotalServices; i++)
+			if (Channel == m_ServiceChannels[i])
+				break;
+		if (i >= m_TotalServices)
+			return false;  // no such a channel in the service list
+
+		size_t index = i;
+		for (i = 0; i < m_TotalProperties; i++)
+			if (!keyword.compare(m_pptr[i]->keyword))
+				break;
+		if (i >= m_TotalProperties)
+			return false; // no such a keyword in the Properties
+
+		size_t j = m_TotalDBElements[index];
+		SubIndex[index][j] = i;
+		m_TotalDBElements[index]++;
+		return true;
+	}
+
+	// Add a service in the list, typically this information is queried from startup table
 	bool AddAService(string Title, long Channel)
 	{
 		if (Channel <= 0 || Channel > 255)
@@ -27,15 +58,211 @@ public:
 		m_err = 0;
 		m_ServiceTitles[m_TotalServices] = Title;
 		m_ServiceChannels[m_TotalServices] = Channel;
+		m_TotalDBElements[m_TotalServices] = 0;
+		m_TotalServices++;
 		return true;
 	};
 
+	// Let each sub module report its message status
 	bool RequestModuleStatus()
 	{
 		SndMsg(NULL, CMD_COMMAND, 0, m_ServiceChannels[0]);
 		for (size_t i = 1; i < m_TotalServices; i++)
 			ReSendMsgTo(m_ServiceChannels[i]);
 		return true;
+	}
+
+	bool InformDown(long Channel)
+	{
+		// The main informs every sub module that the service on the Channel has down
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		m_buf.rChn = Channel;
+		m_buf.sChn = Channel;
+		m_buf.sec = tv.tv_sec;
+		m_buf.usec = tv.tv_usec;
+		m_buf.len = 0; // temporal assigned to 0
+		m_buf.type = CMD_DOWN;
+
+		// broadcast to every sub modules, not main
+		for (size_t i = 1; i < m_TotalServices; i++)
+			ReSendMsgTo(m_ServiceChannels[i]);
+
+		return true;
+	}
+
+	// Reply the database query from the sub modules
+	bool ReplyDBQuery()
+	{
+		// The main reply the database query results to the client
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		m_buf.rChn = m_MsgChn;
+		m_buf.sChn = m_Chn;
+		m_buf.sec = tv.tv_sec;
+		m_buf.usec = tv.tv_usec;
+		m_buf.len = 0; // temporal assigned to 0
+		m_buf.type = CMD_DATABASEQUERY;
+
+		size_t offset = 0;
+		size_t i;
+		for (i = 0; i < m_TotalServices; i++)
+			if (m_ServiceChannels[i] == m_MsgChn)
+				break;
+		if (i >= m_TotalServices)
+			return false;  // no such a service channel in the list
+
+		size_t totalElenemts = m_TotalDBElements[i];
+		for (i = 0; i < totalElenemts; i++)
+		{
+			size_t len = m_pptr[i]->keyword.length() + 2;
+			len += m_pptr[i]->len ? m_pptr[i]->len : static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+
+			// send the message if the buffer is full
+			if (offset + len > 255)
+			{
+				m_buf.len = offset;
+				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+				{
+					m_err = errno;
+					return false;
+				};
+
+				m_TotalMessageSent++;
+				offset = 0;
+				m_err = 0;
+			}
+
+			// assign the keyword of the property
+			strcpy(m_buf.mText + offset, m_pptr[i]->keyword.c_str());
+			offset += m_pptr[i]->keyword.length() + 1;
+
+			//assign the length of the property
+			len = m_pptr[i]->len;
+			m_buf.mText[offset++] = m_pptr[i]->len;
+
+			// assign the value of the property
+			if (len)
+			{
+				memcpy(m_buf.mText + offset, m_pptr[i]->ptr, len);
+				offset += len;
+			}
+			else
+			{
+				// A string is different from normal
+				strcpy(m_buf.mText + offset, static_cast<string *>(m_pptr[i]->ptr)->c_str());
+				offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+			}
+		}
+
+		m_buf.len = offset;
+		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+		{
+			m_err = errno;
+			return false;
+		}
+		m_err = 0;
+		m_TotalMessageSent++;
+		return true;
+	}
+
+	bool ReplyServiceList()
+	{
+		// The main reply the database query results to the client
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		m_buf.rChn = m_MsgChn;
+		m_buf.sChn = m_Chn;
+		m_buf.sec = tv.tv_sec;
+		m_buf.usec = tv.tv_usec;
+		m_buf.type = CMD_LIST;
+
+		size_t offset = 0;
+		for (size_t i = 0; i < m_TotalServices; i++)
+		{
+			m_buf.mText[offset++] = m_ServiceChannels[i] & 0xFF;
+			strcpy(m_buf.mText + offset, m_ServiceTitles[i].c_str());
+			offset += m_ServiceTitles[i].length() + 1;
+		}
+		m_buf.len = offset;
+
+		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+		{
+			m_err = errno;
+			return false;
+		}
+		m_err = 0;
+		m_TotalMessageSent++;
+		return true;
+	}
+
+	void ParseDBUpdate()
+	{
+		// map the updated data from clients to local variables in main module
+		size_t offset = 0;
+		string keyword;
+		do
+		{
+			keyword.assign(m_buf.mText + offset); // read the keyword
+			offset += keyword.length() + 1; // there is a /0 in the end
+			if (keyword.empty()) // end of assignment when keyword is empty
+				return;
+
+			char n = m_buf.mText[offset++]; // read data length, 0 represents for string
+			size_t i;
+			for (i = 0; i < m_TotalProperties; i++)
+			{
+				// check if the keyword matched
+				if (keyword.compare(m_pptr[i]->keyword) == 0)
+				{
+					// check the len/type matched or not
+					if (n != m_pptr[i]->len)
+					{
+						m_err = -121;
+						// This is a error 
+						Log(keyword + " from channel " + to_string(m_MsgChn) + " has length of " 
+							+ to_string(n) + ", local's is of " + to_string(m_pptr[i]->len), 2);
+						continue;  // continue to parse next one
+					}
+
+					// type 0 means a string which shall be assigned the value in a different way
+					if (m_pptr[i]->len)
+					{
+						memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
+						offset += n;
+					}
+					else
+					{
+						static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
+						offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+					}
+
+					break;  // break for loop
+				}
+			}
+
+			if (i >= m_TotalProperties)
+			{
+				m_err = -120;
+				// This is a warning
+				Log(m_pptr[i]->keyword + " from channel " + to_string(m_MsgChn) + " does not match any local variables.", 3);
+			}
+		} while (offset < 255);
+
+	};
+
+	size_t CheckWatchdog()
+	{
+		for (size_t i = 1; i < m_TotalServices; i++)
+		{
+			size_t index = m_ServiceChannels[i];
+			if (m_WatchdogTimer[index] > 0 && m_buf.sec >= m_WatchdogTimer[index] + 5)
+			{
+				m_WatchdogTimer[index] = 0;
+				return index;
+			}
+		}
+		return 0;
 	}
 };
 
@@ -58,8 +285,6 @@ int main(int argc, char *argv[])
 
 	string serviceTitles[5] = { "MAIN", "GPS", "Radar", "Trigger", "FrontCam" };
 	char serviceChannels[5] = { 1,3,4,5,19 };
-	char serviceListBuf[255]; // store the service list
-	size_t lengthServiceListBuf = 0;
 
 	char *bufMsg;
 	size_t typeMsg;
@@ -69,7 +294,8 @@ int main(int argc, char *argv[])
 	pid_t pid;
 	pid_t ppid;
 	string sTitle;
-	char LogSeverity(2);
+	char LogSeverity(4);
+	char Severity;
 	string logContent;
 	struct timeval tv;
 
@@ -85,17 +311,7 @@ int main(int argc, char *argv[])
 	string ActiveTriggers("FLB SRN MIC LSB RLB");
 	int AutoUpload = 0;
 
-	// Prepare the service list. This is a simulation.
-	// [channel_1][title_1][channel_2][title_2] ... [channel_n][title_n] ; titles are end with /0. channel is of size 1 byte
-	for (int i = 0; i < 5; i++)
-	{
-		serviceListBuf[offset++] = serviceChannels[i];
-		strcpy(serviceListBuf + offset, serviceTitles[i].c_str());
-		offset += serviceTitles[i].length() + 1;
-	}
-	lengthServiceListBuf = offset;
-
-	ServiceUtils *launcher = new ServiceUtils(0, argv);
+	MainModule *launcher = new MainModule();
 	if (!launcher->StartService())
 	{
 		cerr << endl << "Cannot launch the headquater." << endl;
@@ -114,7 +330,22 @@ int main(int argc, char *argv[])
 	launcher->LocalMap("Luanguage", &Luanguage, 0);
 	launcher->LocalMap("Active Triggers", &ActiveTriggers, 0);
 	launcher->LocalMap("Auto upload", &AutoUpload);
-	launcher->LocalMap("SeverityLevel", &LogSeverity, 1);
+//	launcher->LocalMap("SeverityLevel", &LogSeverity, 1);
+
+	// Add every service to the service list
+	for (int i = 0; i < 5; i++)
+		launcher->AddAService(serviceTitles[i], serviceChannels[i]);
+
+	launcher->AddDBElement("PreEvent", 19);
+	launcher->AddDBElement("CamPath", 19);
+	launcher->AddDBElement("Active upload", 3);
+	launcher->AddDBElement("Launguage", 4);
+
+	launcher->AddDBElement("WAP", 5);
+
+	launcher->SndCmd("LogSeverityLevel=5", "1");
+	launcher->SndCmd("AutoWatchdog=off", "1");
+	launcher->SndCmd("AutoUpdate=on", "1");
 
 	// Simulate the main module/head working
 	while (1)
@@ -122,11 +353,11 @@ int main(int argc, char *argv[])
 		gettimeofday(&tv, nullptr);
 
 		// check the watch dog
-		chn = launcher->WatchdogFeed();
+		chn = launcher->CheckWatchdog();
 		if (chn)
 		{
 			cout << getDateTime(tv.tv_sec, tv.tv_usec) 
-				<< " : Watchdog warning. Service provider '" << launcher->GetServiceTitle(chn) 
+				<< " : Watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
 		}
 
@@ -135,50 +366,64 @@ int main(int argc, char *argv[])
 		if (!typeMsg)
 			continue;
 		len = launcher->GetRcvMsgBuf(&bufMsg);
-		//memcpy(bufMsg, p, len);
 
-		currentDateTime = getDateTime(tv.tv_sec, tv.tv_usec);
+		// get the current time
+		gettimeofday(&tv, nullptr);
+		currentDateTime = getDateTime(tv.tv_sec, tv.tv_usec) + " : " + launcher->GetServiceTitle(launcher->m_MsgChn);
 		tmp = getDateTime(launcher->m_MsgTS_sec, launcher->m_MsgTS_usec);
 		// process those messages sent to main module
 		switch (typeMsg)
 		{
 		case CMD_ONBOARD:
-			sTitle.assign(bufMsg + offset);
-			offset = sTitle.length() + 1;
-			memcpy(&pid, bufMsg + offset, sizeof(pid));
-			offset += sizeof(pid);
+
+			memcpy(&pid, bufMsg, sizeof(pid));
+			offset = sizeof(pid);
 			memcpy(&ppid, bufMsg + offset, sizeof(ppid));
+			// When get sub-module onboard, reply databse query first
+			launcher->ReplyDBQuery();
 
-			cout << currentDateTime << " : Service provider " << sTitle 
-				<< " gets onboard on channel " << launcher->m_MsgChn 
-				<< " with PID=" << pid
-				<< ", Parent PID=" << ppid << " at " << tmp << endl;
+			// Reply service list to sub-module after
+			launcher->ReplyServiceList();
 
-			// send back the service list first
-			launcher->SndMsg(serviceListBuf, CMD_LIST, lengthServiceListBuf, launcher->m_MsgChn);
+			launcher->SndCmd("LogSeverityLevel=5", launcher->GetServiceTitle(launcher->m_MsgChn));
 
-			// send back the database properties at the end ??
-			launcher->ServiceQuery(to_string(launcher->m_MsgChn));
+			//launcher->Log("Service module " + launcher->GetServiceTitle(launcher->m_MsgChn) + " gets onboard at channel "
+			//	+ to_string(launcher->m_MsgChn));
+
+			if (LogSeverity >= 4)
+				cout << currentDateTime << " gets onboard on channel " << launcher->m_MsgChn  << " with pid=" << pid
+				<< ", ppid=" << ppid << " at " << tmp << endl;
+			break;
+
+		case CMD_DATABASEUPDATE:
+			launcher->ParseDBUpdate();
+			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " updates its database elements.");
+			if (LogSeverity >= 4)
+				cout << currentDateTime << " updates its database elements at " << tmp << endl;
 			break;
 
 		case CMD_LOG:
 			offset = 0;
-			memcpy(&LogSeverity, bufMsg, sizeof(LogSeverity));
+			memcpy(&Severity, bufMsg, sizeof(Severity));
 			logContent.assign(bufMsg + sizeof(LogSeverity));
-			cout << currentDateTime << " : LOG from channel " << launcher->m_MsgChn 
-				<< " on " << tmp << ", [" << LogSeverity << "] " << logContent  << endl;
+			
+			if (LogSeverity >= Severity)
+				cout << currentDateTime << " logs [" << +Severity << "] " << logContent << endl;
+			else
+				cout << currentDateTime << " ignores logs [" << +Severity << "]" << endl;
 			break;
 
 		case CMD_DATABASEQUERY:
-			CloudServer = getDateTime(tv.tv_sec, 0);
-			PreEvent = tv.tv_usec;
-			launcher->ServiceQuery(to_string(launcher->m_MsgChn));
-			cout << currentDateTime << " : Got database query request from channel " 
-				<< launcher->m_MsgChn << " at " << tmp << endl;
+			launcher->ReplyDBQuery();
+			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " requests database query.", 5);
+			if (LogSeverity >= 5)
+				cout << currentDateTime << " requests database query at " << tmp << endl;
 			break;
 
 		case CMD_WATCHDOG:
-			cout << "Got a heartbeat/watchdog message from " << launcher->m_MsgChn << " at " << tmp << endl;
+			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " feed its watchdog.", 5);
+			if (LogSeverity >= 5)
+				cout << currentDateTime << " feeds its watchdog at " << tmp << endl;
 			break;
 
 		case CMD_STRING:
@@ -186,26 +431,19 @@ int main(int argc, char *argv[])
 				<< "' from " << launcher->m_MsgChn << " at " << tmp << endl;
 			break;
 
-		case CMD_DATABASEUPDATE:
-			cout << currentDateTime << " : Got a database update request from channel " 
-				<< launcher->m_MsgChn << " at " << tmp << endl;
-			break;
-
 		case CMD_DOWN:
-			cout << currentDateTime << " : Got a message of service down from channel "
-				<< launcher->m_MsgChn << " at " << tmp << endl;
-
 			// broadcast the message that one channel has down
-			launcher->UpdateServiceData();
-			cout << currentDateTime << " : Broadcast the message that service on channel "
-				<< launcher->m_MsgChn << " is down at " << tmp << endl;
+			launcher->InformDown(launcher->m_MsgChn);
+
+			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " reports down. Informs every sub modules.");
+			if (LogSeverity >= 4)
+				cout << currentDateTime << " : reports down. Informs every modules." << endl;
 			break;
 
 		default:
-			cout << currentDateTime << " : Got message '" << launcher->GetRcvMsg() << "' from " << launcher->m_MsgChn
-				<< " with type of " << typeMsg << " and length of " << len << " at " << tmp << endl;
+			if (LogSeverity >= 3)
+				cout << currentDateTime << " : sends a message '" << launcher->GetRcvMsg() << "' with type of " 
+				<< typeMsg << " and length of " << len << " at " << tmp << endl;
 		}
 	}
-
-	//  return a.exec();
 }

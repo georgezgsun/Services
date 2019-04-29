@@ -72,12 +72,16 @@ protected:
 
 	long m_WatchdogTimer[255];  // Store the watchdog timers
 
+	size_t m_HeaderLength;  // The header length of message
+	int m_Severity; // The level of the log;  1-critical, 2-error, 3-warning, 4-infomation, 5-debug, 6-verbose;
+	bool m_AutoUpdate;  // Enable service data been auto updated during ChkNewMsg
+	bool m_AutoWatchdog; // Enable watchdog been auto feed during ChkNewMsg
+	long m_AutoSleep;  // Enable auto sleep during ChkNewMsg
+
 	bool ReSendMsgTo(long ServiceChannel);
 
 private:
 	string m_Title;  // The title of this channel
-	size_t m_HeaderLength;  // The header length of message
-	char m_Severity; // The level of the log;  1-critical, 2-error, 3-warning, 4-infomation, 5-debug, 6-verbose;
 	key_t m_Key;  // The key of the message queue
 
 public:
@@ -106,7 +110,7 @@ public:
 	string GetRcvMsg(); // receive a text message from specified service provider, like GPS, RADAR, TRIGGER.
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
-	size_t WatchdogFeed(); // smart feed the watchdog in main module
+	bool WatchdogFeed(); // smart feed the watchdog in main module
 	bool Log(string logContent, char Severity); // Send a log to log main module. It is controlled by log level
 	bool Log(string logContent); // Send a log to log main module. Severe level of this log is set to default value 4 normal
 

@@ -98,6 +98,7 @@ int main(int argc, char *argv[])
 			msg = tester->GetRcvMsg();
 			cout << datetime << " : Received messages '" << msg << "' of type " << command << " from " << tester->m_MsgChn << endl;
 
+			// if CMD_DOWN is sent from others, no return
 			if (command == CMD_DOWN)
 			{
 				cout << myTitle << " is down by the command from main module." << endl;
