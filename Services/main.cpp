@@ -88,13 +88,13 @@ public:
 		return true;
 	}
 
-	bool InformDown(long Channel)
+	bool InformDown()
 	{
 		// The main informs every sub module that the service on the Channel has down
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
-		m_buf.rChn = Channel;
-		m_buf.sChn = Channel;
+		m_buf.rChn = m_MsgChn;
+		m_buf.sChn = m_MsgChn;
 		m_buf.sec = tv.tv_sec;
 		m_buf.usec = tv.tv_usec;
 		m_buf.len = 0; // temporal assigned to 0
@@ -229,7 +229,7 @@ public:
 					{
 						m_err = -121;
 						// This is a error 
-						Log(keyword + " from channel " + to_string(m_MsgChn) + " has length of " 
+						Log(keyword + " from channel " + to_string(m_MsgChn) + " has length of "
 							+ to_string(n) + ", local's is of " + to_string(m_pptr[i]->len), 2);
 						continue;  // continue to parse next one
 					}
@@ -276,18 +276,300 @@ public:
 		}
 		return 0;
 	}
+
+	size_t ChkNewMsg()
+	{
+		memset(m_buf.mText, 0, sizeof(m_buf.mText));  // fill 0 before reading, make sure no garbage left over
+		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT);
+		l -= m_HeaderLength;
+		m_err = static_cast<int>(l);
+		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
+		if (l < 0)
+		{
+			// Auto update the service data if enabled
+			if (m_AutoUpdate)
+				UpdateServiceData();
+
+			// Auto feed the watchdog if enabled.
+			if (m_AutoWatchdog)
+				WatchdogFeed();
+
+			// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
+			if (m_AutoSleep)
+				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
+
+			return 0;
+		}
+		m_TotalMessageReceived++;
+
+		m_err = 0;
+		m_MsgChn = m_buf.sChn; // the service channel where the message comes
+		m_MsgTS_sec = m_buf.sec; // the time stamp in seconds of latest receiving message
+		m_MsgTS_usec = m_buf.usec;
+		size_t type = m_buf.type;
+		size_t offset;
+		pid_t pid, ppid;
+		size_t TotalMsgSent;
+		size_t TotalMsgReceived;
+		size_t len;
+		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
+		string sState[2]{ "off", "on" };
+
+		string keyword;
+		string msg;
+		char Severity;
+
+		// reset the watchdog timer for that channel
+		m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; 
+
+		// no auto reply for those normal receiving. type < 31 commands; 32 is string. 33 is integer. anything larger are user defined types
+		if (type >= 32)
+			return type;
+
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+
+		size_t i; // general iter
+		switch (type)
+		{
+		case CMD_ONBOARD:
+			// update onboard list which is stored at m_Clients[]
+			for (i = 0; i < m_TotalClients; i++)
+			{ 
+				if (m_Clients[i] == m_MsgChn)
+					break;
+			}
+			if (i >= m_TotalClients)
+				m_Clients[m_TotalClients] = m_MsgChn;
+
+			// get the module pid and save it in m_Subscriptions[], reuse the storage
+			memcpy(&pid, m_buf.mText, sizeof(pid));
+			offset = sizeof(pid);
+			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
+			m_Subscriptions[m_TotalClients++] = pid;
+
+			// reply databse query first
+			ReplyDBQuery();
+
+			// reply service list to sub-module next
+			ReplyServiceList();
+
+			// reply the log severity level at the end
+			//TODO get the severity from database
+			msg = GetServiceTitle(m_MsgChn);
+			SndCmd("LogSeverityLevel=4", msg);
+
+			// local log
+			Log("A new service '" + msg + "' gets onboard at channel " + to_string(m_MsgChn));
+			return type;
+
+		case CMD_DATABASEUPDATE:
+			msg = GetServiceTitle(m_MsgChn);
+			ParseDBUpdate();
+			Log("Service '" + msg + "' updates its database elements.");
+			return type;
+
+		case CMD_LOG:
+			Log();
+			return type;
+
+		case CMD_DATABASEQUERY:
+			msg = GetServiceTitle(m_MsgChn);
+			ReplyDBQuery();
+			Log("Service '" + msg + "' requests database query.", 5);
+			return type;
+
+		case CMD_WATCHDOG:
+			msg = GetServiceTitle(m_MsgChn);
+			Log("Service '" + msg + "' feed its watchdog.", 5);
+			return type;
+
+		case CMD_STRING:
+			msg = GetServiceTitle(m_MsgChn);
+			Log("Service '" + msg + "'sends a message '" + GetRcvMsg() + "' to the main. ");
+			return type;
+
+		case CMD_DOWN:
+			msg = GetServiceTitle(m_MsgChn);
+			// Test RequestServiceStatus here
+			// RequestModuleStatus();
+
+			// broadcast the message that one channel has down
+			InformDown();
+
+			Log("Service " + msg + " reports down. Informs every sub modules.");
+			return type;
+
+		// Auto parse the system configurations
+		case CMD_COMMAND:
+			msg.assign(m_buf.mText);
+			offset = msg.find_first_of('=');  // find =
+			keyword = msg.substr(0, offset);  // keyword is left of =
+			msg = msg.substr(offset + 1); // now msg is right of =
+
+			// Update the log severity level
+			if (!keyword.compare("LogSeverityLevel"))
+			{
+				int i = atoi(msg.c_str());
+				if (i > 0 && i < 7)
+					m_Severity = i;
+
+				if (!msg.compare("Information"))
+					m_Severity = 4;
+
+				if (!msg.compare("Debug"))
+					m_Severity = 5;
+
+				if (!msg.compare("Verbose"))
+					m_Severity = 6;
+				return m_buf.type;
+			}
+
+			// the flag update of auto service data update
+			if (!keyword.compare("AutoUpdate"))
+			{
+				if (msg.compare("on"))
+					m_AutoUpdate = true;
+				if (msg.compare("off"))
+					m_AutoUpdate = false;
+				return m_buf.type;
+			}
+
+			// the flag update of the watchdog auto feed 
+			if (!keyword.compare("AutoWatchdog"))
+			{
+				if (msg.compare("on"))
+					m_AutoWatchdog = true;
+				if (msg.compare("off"))
+					m_AutoWatchdog = false;
+				return m_buf.type;
+			}
+
+			// the flag update of auto sleep
+			if (!keyword.compare("AutoSleep"))
+			{
+				if (msg.compare("on"))
+					m_AutoSleep = true;
+				if (msg.compare("off"))
+					m_AutoSleep = false;
+			}
+			return type; // return when get a command. No more auto parse
+
+
+		case CMD_STATUS:
+			msg = GetServiceTitle(m_MsgChn);
+			Log("Service '" + msg + "' reports its status");
+
+			TotalMsgReceived = 0;
+			TotalMsgSent = 0;
+			offset = 0;
+
+			// total messages sent
+			msg.assign(m_buf.mText + offset);
+			offset += msg.length() + 1;
+			memcpy(&len, m_buf.mText + offset + 1, sizeof(len));
+			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len));
+			offset += sizeof(len) + 1;
+			TotalMsgSent += len;
+
+			// total messages received
+			msg.assign(m_buf.mText + offset);
+			offset += msg.length() + 1;
+			memcpy(&len, m_buf.mText + offset, sizeof(len));
+			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len));
+			offset += sizeof(len) + 1;
+			TotalMsgReceived += len;
+
+			// total database elements
+			msg.assign(m_buf.mText + offset);
+			offset += msg.length() + 1;
+			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+			memcpy(&len, m_buf.mText + offset, sizeof(len));
+			msg.append(to_string(len));
+			Log(msg);
+			offset += sizeof(len) + 1;
+
+			// status
+			msg.assign(m_buf.mText + offset);
+			offset += msg.length() + 1;
+			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+			msg.append(sSeverity[m_buf.mText[offset++]] + " ");
+			msg.append(sState[m_buf.mText[offset++]] + " ");
+			msg.append(sState[m_buf.mText[offset++]] + " ");
+			msg.append(sState[m_buf.mText[offset++]]);
+			Log(msg);
+			offset++;
+
+			// subscriptions
+			msg.assign(m_buf.mText + offset);
+			len = msg.length();
+			offset += len + 1;
+			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+			for (size_t i = 0; i < len; i++)
+				msg.append(to_string(m_buf.mText[offset + i]) + " ");
+			Log(msg);
+			offset += len + 1;
+
+			// clients
+			msg.assign(m_buf.mText + offset);
+			len = msg.length();
+			offset += len + 1;
+			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+			for (size_t i = 0; i < len; i++)
+				msg.append(to_string(m_buf.mText[offset + i]) + " ");
+			Log(msg);
+			offset += len + 1;
+
+			return type;
+
+		default:
+			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len));
+		}
+	}
+
+	// print the log from local with given severity
+	bool Log(string msg, char Severity)
+	{
+		if (Severity > m_Severity)
+			return false;
+
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+
+		cout << getDateTime(tv.tv_sec, tv.tv_usec) << " 'MAIN' [" << +Severity << "] " << msg << endl;
+	}
+
+	// print local log with normal severity
+	bool Log(string msg)
+	{
+		return Log(msg, 4);
+	}
+	
+	// print the log from service module
+	bool Log()
+	{
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		
+		string msg;
+		msg.assign(m_buf.mText + 1);
+		cout << getDateTime(tv.tv_sec, tv.tv_usec) << " '" << GetServiceTitle(m_MsgChn) << "' [" << to_string(m_buf.mText[0]) << "] "
+			<< msg << " at " << getDateTime(m_MsgTS_sec, m_MsgTS_usec) << endl;
+		return true;
+	}
+
+	string getDateTime(time_t tv_sec, time_t tv_usec)
+	{
+		struct tm *nowtm;
+		char tmbuf[64], buf[64];
+
+		nowtm = localtime(&tv_sec);
+		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
+		snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
+		return buf;
+	}
 };
 
-string getDateTime(time_t tv_sec, time_t tv_usec)
-{
-	struct tm *nowtm;
-	char tmbuf[64], buf[64];
-
-	nowtm = localtime(&tv_sec);
-	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
-	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
-	return buf;
-};
 
 int main(int argc, char *argv[])
 {
@@ -332,7 +614,7 @@ int main(int argc, char *argv[])
 		cerr << endl << "Cannot launch the headquater." << endl;
 		return -1;
 	}
-	cout << endl << "main module starts. Waiting for clients to join...." << endl;
+	cout << endl << "Main module starts. Waiting for clients to join...." << endl;
 
 	//launcher->SndCmd("LogSeverityLevel=3", "1");
 
@@ -361,7 +643,7 @@ int main(int argc, char *argv[])
 	launcher->AddDBElement("WAP", 5);
 
 	// These settings will take effect only after ChkNewMsg
-	launcher->SndCmd("LogSeverityLevel=Verbose", "1");
+	launcher->SndCmd("LogSeverityLevel=Information", "1");
 	launcher->SndCmd("AutoWatchdog=off", "1");
 	launcher->SndCmd("AutoUpdate=on", "1");
 
@@ -372,7 +654,7 @@ int main(int argc, char *argv[])
 		chn = launcher->CheckWatchdog();
 		if (chn)
 		{
-			cout << getDateTime(tv.tv_sec, tv.tv_usec) 
+			cout << launcher->getDateTime(tv.tv_sec, tv.tv_usec) 
 				<< " : Watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
 			continue;
@@ -382,157 +664,5 @@ int main(int argc, char *argv[])
 		typeMsg = launcher->ChkNewMsg();
 		if (!typeMsg)
 			continue;
-		len = launcher->GetRcvMsgBuf(&bufMsg);
-		string keyword;
-
-		// get the current time
-		gettimeofday(&tv, nullptr);
-		currentDateTime = getDateTime(tv.tv_sec, tv.tv_usec) + " : " + launcher->GetServiceTitle(launcher->m_MsgChn);
-		tmp = getDateTime(launcher->m_MsgTS_sec, launcher->m_MsgTS_usec);
-		// process those messages sent to main module
-		switch (typeMsg)
-		{
-		case CMD_ONBOARD:
-			memcpy(&pid, bufMsg, sizeof(pid));
-			offset = sizeof(pid);
-			memcpy(&ppid, bufMsg + offset, sizeof(ppid));
-			// When get sub-module onboard, reply databse query first
-			launcher->ReplyDBQuery();
-
-			// Reply service list to sub-module after
-			launcher->ReplyServiceList();
-
-			launcher->SndCmd("LogSeverityLevel=4", launcher->GetServiceTitle(launcher->m_MsgChn));
-
-			//launcher->Log("Service module " + launcher->GetServiceTitle(launcher->m_MsgChn) + " gets onboard at channel "
-			//	+ to_string(launcher->m_MsgChn));
-
-			if (LogSeverity >= 4)
-				cout << currentDateTime << " gets onboard on channel " << launcher->m_MsgChn  << " with pid=" << pid
-				<< ", ppid=" << ppid << " at " << tmp << endl;
-			break;
-
-		case CMD_DATABASEUPDATE:
-			launcher->ParseDBUpdate();
-			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " updates its database elements.");
-			if (LogSeverity >= 4)
-				cout << currentDateTime << " updates its database elements at " << tmp << endl;
-			break;
-
-		case CMD_LOG:
-			offset = 0;
-			memcpy(&Severity, bufMsg, sizeof(Severity));
-			logContent.assign(bufMsg + sizeof(LogSeverity));
-			
-			if (LogSeverity >= Severity)
-				cout << currentDateTime << " logs [" << sSeverity[Severity] << "] " << logContent << endl;
-			else
-				cout << currentDateTime << " ignores logs [" << sSeverity[Severity] << "]" << endl;
-			break;
-
-		case CMD_DATABASEQUERY:
-			launcher->ReplyDBQuery();
-			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " requests database query.", 5);
-			if (LogSeverity >= 5)
-				cout << currentDateTime << " requests database query at " << tmp << endl;
-			break;
-
-		case CMD_WATCHDOG:
-			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " feed its watchdog.", 5);
-			if (LogSeverity >= 5)
-				cout << currentDateTime << " feeds its watchdog at " << tmp << endl;
-			break;
-
-		case CMD_STRING:
-			cout << currentDateTime << " : Got a message of string '" << launcher->GetRcvMsg() 
-				<< "' from " << launcher->m_MsgChn << " at " << tmp << endl;
-			break;
-
-		case CMD_DOWN:
-			launcher->RequestModuleStatus();
-
-			// broadcast the message that one channel has down
-			launcher->InformDown(launcher->m_MsgChn);
-
-			//launcher->Log("Service " + launcher->GetServiceTitle(launcher->m_MsgChn) + " reports down. Informs every sub modules.");
-			if (LogSeverity >= 4)
-				cout << currentDateTime << " : reports down. Informs every modules." << endl;
-			break;
-
-			// Auto parse the system configurations
-		case CMD_COMMAND:
-			msg.assign(bufMsg);
-			launcher->Log("Get a command '" + msg + "' from " + launcher->GetServiceTitle(launcher->m_MsgChn));
-			break;
-
-		case CMD_STATUS:
-			offset = 0;
-			totalReceived = 0;
-			totalSent = 0;
-
-			cout << currentDateTime << " : reports status \n";
-
-			// total messages sent
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = ";
-			memcpy(&len, bufMsg + offset, sizeof(len));
-			offset += sizeof(len);
-			cout << len << endl;
-			totalSent += len;
-
-			// total messages received
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = ";
-			memcpy(&len, bufMsg + offset, sizeof(len));
-			offset += sizeof(len);
-			cout << len << endl;
-			totalReceived += len;
-
-			// total database elements
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = ";
-			memcpy(&len, bufMsg + offset, sizeof(len));
-			offset += sizeof(len);
-			cout << len << endl;
-
-			// status
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = " << +bufMsg[offset++] << +bufMsg[offset++] << +bufMsg[offset++] << +bufMsg[offset++];
-			offset++;
-			cout << endl;
-
-			// subscriptions
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = ";
-			msg.assign(bufMsg + offset);
-			len = msg.length();
-			for (size_t i = 0; i < len; i++)
-				cout << +bufMsg[offset + i] << " ";
-			offset += len + 1;
-			cout << endl;
-
-			// clients
-			msg.assign(bufMsg + offset);
-			offset += msg.length() + 1;
-			cout << msg << "(" << +bufMsg[offset++] << ") = ";
-			msg.assign(bufMsg + offset);
-			len = msg.length();
-			for (size_t i = 0; i < len; i++)
-				cout << +bufMsg[offset + i] << " ";
-			offset += len + 1;
-			cout << endl;
-
-			break;
-
-		default:
-			if (LogSeverity >= 3)
-				cout << currentDateTime << " gets a message '" << launcher->GetRcvMsg() << "' with type of " 
-				<< typeMsg << " and length of " << len << " at " << tmp << endl;
-		}
 	}
 }

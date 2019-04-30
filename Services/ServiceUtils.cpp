@@ -272,8 +272,6 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 		m_err = -2; // Cannot find the ServiceTitle in the list
 		return false;
 	}
-	if (m_Chn == m_buf.rChn) // do not send messages to itself
-		return false;
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
@@ -745,7 +743,7 @@ size_t ServiceUtils::ChkNewMsg()
 				if (i > 0 && i < 7)
 					m_Severity = i;
 
-				if (!msg.compare("Normal"))
+				if (!msg.compare("Information"))
 					m_Severity = 4;
 
 				if (!msg.compare("Debug"))
@@ -951,15 +949,15 @@ bool ServiceUtils::Log(string LogContent, char Severity)
 
 	memcpy(m_buf.mText, &Severity, sizeof(Severity));
 	memcpy(m_buf.mText + sizeof(Severity), LogContent.c_str(), LogContent.length() + 1);
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed 
-		return true;
+		m_err = errno;
+		return false;
 	}
-	m_err = errno;
-	return false;
+	m_err = 0;
+	m_TotalMessageSent++;
+	m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed 
+	return true;
 };
 
 // Send a log to main with severe level 4
@@ -979,7 +977,7 @@ bool ServiceUtils::LocalMap(string keyword, void *p, char len)
 
 	m_err = 0;
 	for (size_t i = 0; i < m_TotalProperties; i++)
-		if (keyword.compare(m_pptr[i]->keyword) == 0)
+		if (!keyword.compare(m_pptr[i]->keyword))
 		{
 			if (m_pptr[i]->len != len)
 			{
@@ -1159,14 +1157,14 @@ bool ServiceUtils::dbUpdate()
 	}
 
 	m_buf.len = offset;
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT) == 0)
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		m_err = 0;
-		m_TotalMessageSent++;
-		return true;
+		m_err = errno;
+		return false;
 	}
-	m_err = errno;
-	return false;
+	m_err = 0;
+	m_TotalMessageSent++;
+	return true;
 };
 
 long ServiceUtils::GetServiceChannel(string serviceTitle)
