@@ -6,6 +6,7 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <string.h>
+#include <sqlite3.h>
 #include "ServiceUtils.h"
 
 using namespace std;
@@ -19,12 +20,22 @@ public:
 		m_AutoSleep = true;  // Auto sleep is also enabled in main
 		m_AutoUpdate = false; // No auto update for service data in main. The m_ServiceData is reused by service list
 		m_AutoWatchdog = false; // No auto watchdog feed at main
-	};
+
+		int rst = sqlite3_open("/home/georges/projects/Services/logs.db", &m_Logdb);
+		m_err = rst ? -1 : 0;
+	}
+
+	~MainModule()
+	{
+		sqlite3_close(m_Logdb);
+	}
 
 	// used to store the index of database elements for each sub module 
 	size_t SubIndex[32][127];
 
 	size_t m_TotalDBElements[127];
+
+	sqlite3 *m_Logdb;
 
 	// Add an database keyword in a sub module. This keyword shall be added into the properties before
 	bool AddDBElement(string keyword, long Channel)
@@ -533,10 +544,26 @@ public:
 		if (Severity > m_Severity)
 			return false;
 
+		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
+		string sql = "INSERT INTO AppLog VALUES (";
+		char *zErrMsg = 0;
+
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
+		
+		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", 'MAIN', 1, ");
+		sql.append(to_string(Severity) + ", '");
+		sql.append(msg);
+		sql.append("', 0, 0);");
+		cout << msg << endl;
 
-		cout << getDateTime(tv.tv_sec, tv.tv_usec) << " 'MAIN' [" << +Severity << "] " << msg << endl;
+		if (sqlite3_exec(m_Logdb, sql.c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+		{
+			fprintf(stderr, "Cannot insert new log into AppLog table with error: %s\n", zErrMsg);
+			sqlite3_free(zErrMsg);
+			return false;
+		}
+		return true;
 	}
 
 	// print local log with normal severity
@@ -548,13 +575,38 @@ public:
 	// print the log from service module
 	bool Log()
 	{
+		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
+		string sql = "INSERT INTO AppLog VALUES (";
+		char *zErrMsg = 0;
+
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
 		
 		string msg;
 		msg.assign(m_buf.mText + 1);
-		cout << getDateTime(tv.tv_sec, tv.tv_usec) << " '" << GetServiceTitle(m_MsgChn) << "' [" << to_string(m_buf.mText[0]) << "] "
-			<< msg << " at " << getDateTime(m_MsgTS_sec, m_MsgTS_usec) << endl;
+		char Severity = m_buf.mText[0];
+		if (Severity > 6)
+			Severity = 6;
+		if (Severity < 1)
+			Severity = 1;
+
+		// cout << getDateTime(tv.tv_sec, tv.tv_usec) << " '" << GetServiceTitle(m_MsgChn) << "' [" << to_string(m_buf.mText[0]) << "] "
+		//	<< msg << " at " << getDateTime(m_MsgTS_sec, m_MsgTS_usec) << endl;
+
+		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
+		sql.append(GetServiceTitle(m_MsgChn) + "', ");
+		sql.append(to_string(m_MsgChn) + ", ");
+		sql.append(to_string(Severity) + ", '");
+		sql.append(msg);
+		sql.append("', " + to_string(m_MsgTS_sec) + ", " + to_string(m_MsgTS_usec) + ");");
+		cout << sql << endl;
+
+		if (sqlite3_exec(m_Logdb, sql.c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+		{
+			fprintf(stderr, "Cannot insert new log into AppLog table with error: %s\n", zErrMsg);
+			sqlite3_free(zErrMsg);
+			return false;
+		}
 		return true;
 	}
 
@@ -609,6 +661,12 @@ int main(int argc, char *argv[])
 	size_t totalSent{ 0 };
 
 	MainModule *launcher = new MainModule();
+	if (launcher->m_err)
+	{
+		fprintf(stderr, "Cannot open the log database.\n");
+		return 0;
+	}
+
 	if (!launcher->StartService())
 	{
 		cerr << endl << "Cannot launch the headquater." << endl;
