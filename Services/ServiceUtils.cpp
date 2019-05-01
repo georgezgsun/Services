@@ -161,18 +161,21 @@ bool ServiceUtils::StartService()
 			Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
 
 		// Get initialization from the main module;
-		count = 5;
+		count = 20;
+		struct timespec tim = { 0, 10000000L }; // 1ms = 1000000ns
 		do
 		{
 			ChkNewMsg();
+			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
+
 			if (count-- <= 0)
 			{
+				Log("Cannot get the initialization messages from the main module in 5ms. Error: " + to_string(m_err), 1);
 				m_err = -10;
-				Log("Cannot get the initialization messages from the main module in 5ms.", 1);
 				return false;
 			}
 		} while (m_TotalServices <= 0);
-		Log(m_Title + " gets initialized in " + to_string(5 - count) + "ms", 4);
+		Log(m_Title + " gets initialized in " + to_string(200 - count*10) + "ms", 4);
 		
 		// Broadcast my onboard messages to all service channels other than the main module and myself
 		for (size_t i = 1; i < m_TotalServices; i++)
@@ -952,6 +955,7 @@ bool ServiceUtils::Log(string LogContent, char Severity)
 	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
 		m_err = errno;
+		printf("Cannot send message in log with error %d.\n", m_err);
 		return false;
 	}
 	m_err = 0;
@@ -1063,7 +1067,8 @@ bool ServiceUtils::AddToServiceData(string keyword, void *p, char len)
 	m_ServiceDataElements[m_TotalServiceDataElements].keyword = keyword;
 	m_ServiceDataElements[m_TotalServiceDataElements].len = len;
 	m_ServiceDataElements[m_TotalServiceDataElements].ptr = p;
-	Log("Added " + keyword + " to the service data. Total elements in the list is " + to_string(m_TotalProperties));
+	m_TotalServiceDataElements++;
+	Log("Added " + keyword + " to the service data. Total elements in the list is " + to_string(m_TotalServiceDataElements));
 	return true;
 }
 

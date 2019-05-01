@@ -7,9 +7,29 @@
 #include <sys/msg.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <pthread.h>
 #include "ServiceUtils.h"
 
 using namespace std;
+
+struct thread_data
+{
+	sqlite3 * logDB;
+	string * sql;
+};
+
+void *LogInDB(void * threadArg)
+{
+	struct thread_data *my_data;
+	my_data = static_cast<struct thread_data *>(threadArg);
+	char *zErrMsg = 0;
+	if (sqlite3_exec(my_data->logDB, my_data->sql->c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+	{
+		fprintf(stderr, "Cannot insert new log from MAIN into AppLog table with error: %s\n", zErrMsg);
+		sqlite3_free(zErrMsg);
+	}
+	pthread_exit(NULL);
+}
 
 class MainModule : public ServiceUtils
 {
@@ -344,6 +364,9 @@ public:
 		switch (type)
 		{
 		case CMD_ONBOARD:
+			// local log
+			Log("A new service " + msg + " gets onboard at channel " + to_string(m_MsgChn));
+
 			// update onboard list which is stored at m_Clients[]
 			for (i = 0; i < m_TotalClients; i++)
 			{ 
@@ -359,11 +382,13 @@ public:
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
 			m_Subscriptions[m_TotalClients++] = pid;
 
-			// reply databse query first
-			ReplyDBQuery();
-
 			// reply service list to sub-module next
 			ReplyServiceList();
+			Log("Replies the service list to channel " + to_string(m_MsgChn));
+
+			// reply databse query first
+			ReplyDBQuery();
+			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn));
 
 			// reply the log severity level at the end
 			//TODO get the severity from database
@@ -371,13 +396,13 @@ public:
 			SndCmd("LogSeverityLevel=4", msg);
 
 			// local log
-			Log("A new service '" + msg + "' gets onboard at channel " + to_string(m_MsgChn));
+			Log("Send the command LogSeverityLevel=4 to " + msg);
 			return type;
 
 		case CMD_DATABASEUPDATE:
 			msg = GetServiceTitle(m_MsgChn);
 			ParseDBUpdate();
-			Log("Service '" + msg + "' updates its database elements.");
+			Log("Service " + msg + " updates its database elements.");
 			return type;
 
 		case CMD_LOG:
@@ -387,17 +412,17 @@ public:
 		case CMD_DATABASEQUERY:
 			msg = GetServiceTitle(m_MsgChn);
 			ReplyDBQuery();
-			Log("Service '" + msg + "' requests database query.", 5);
+			Log("Service " + msg + " requests database query.", 5);
 			return type;
 
 		case CMD_WATCHDOG:
 			msg = GetServiceTitle(m_MsgChn);
-			Log("Service '" + msg + "' feed its watchdog.", 5);
+			Log("Service " + msg + " feed its watchdog.", 5);
 			return type;
 
 		case CMD_STRING:
 			msg = GetServiceTitle(m_MsgChn);
-			Log("Service '" + msg + "'sends a message '" + GetRcvMsg() + "' to the main. ");
+			Log("Service " + msg + "sends a message " + GetRcvMsg() + " to the main. ");
 			return type;
 
 		case CMD_DOWN:
@@ -555,12 +580,17 @@ public:
 		sql.append(to_string(Severity) + ", '");
 		sql.append(msg);
 		sql.append("', 0, 0);");
-		cout << msg << endl;
+		//cout << sql << endl;
 
-		if (sqlite3_exec(m_Logdb, sql.c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+		pthread_t thread;
+		struct thread_data *threadata = new thread_data;
+		threadata->logDB = m_Logdb;
+		threadata->sql->assign(sql);
+
+		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
+		if (rst)
 		{
-			fprintf(stderr, "Cannot insert new log into AppLog table with error: %s\n", zErrMsg);
-			sqlite3_free(zErrMsg);
+			printf("Cannot create thread. %d\n", rst);
 			return false;
 		}
 		return true;
@@ -576,7 +606,7 @@ public:
 	bool Log()
 	{
 		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-		string sql = "INSERT INTO AppLog VALUES (";
+		string sql = "INSERT INTO AppLog VALUES ( ";
 		char *zErrMsg = 0;
 
 		struct timeval tv;
@@ -599,15 +629,19 @@ public:
 		sql.append(to_string(Severity) + ", '");
 		sql.append(msg);
 		sql.append("', " + to_string(m_MsgTS_sec) + ", " + to_string(m_MsgTS_usec) + ");");
-		cout << sql << endl;
+		//cout << sql << endl;
 
-		if (sqlite3_exec(m_Logdb, sql.c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+		pthread_t thread;
+		struct thread_data *threadata = new thread_data;
+		threadata->logDB = m_Logdb;
+		threadata->sql->assign(sql);
+
+		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
+		if (rst)
 		{
-			fprintf(stderr, "Cannot insert new log into AppLog table with error: %s\n", zErrMsg);
-			sqlite3_free(zErrMsg);
+			printf("Cannot create thread. %d\n", rst);
 			return false;
 		}
-		return true;
 	}
 
 	string getDateTime(time_t tv_sec, time_t tv_usec)
@@ -701,7 +735,7 @@ int main(int argc, char *argv[])
 	launcher->AddDBElement("WAP", 5);
 
 	// These settings will take effect only after ChkNewMsg
-	launcher->SndCmd("LogSeverityLevel=Information", "1");
+	launcher->SndCmd("LogSeverityLevel=Debug", "1");
 	launcher->SndCmd("AutoWatchdog=off", "1");
 	launcher->SndCmd("AutoUpdate=on", "1");
 
@@ -712,8 +746,7 @@ int main(int argc, char *argv[])
 		chn = launcher->CheckWatchdog();
 		if (chn)
 		{
-			cout << launcher->getDateTime(tv.tv_sec, tv.tv_usec) 
-				<< " : Watchdog warning. '" << launcher->GetServiceTitle(chn) 
+			cout << "Watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
 			continue;
 		}

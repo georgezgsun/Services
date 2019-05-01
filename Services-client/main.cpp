@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 
 	tester->AddToServiceData("position", &position);
 	tester->AddToServiceData("latitute", &height);
-	tester->AddToServiceData("epic", &time);
+	tester->AddToServiceData("epoch", &time);
 
 	if (!tester->StartService())
 	{
