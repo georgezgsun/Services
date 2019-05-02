@@ -28,6 +28,7 @@ void *LogInDB(void * threadArg)
 		fprintf(stderr, "Cannot insert new log from MAIN into AppLog table with error: %s\n", zErrMsg);
 		sqlite3_free(zErrMsg);
 	}
+	delete static_cast<thread_data*>(threadArg)->sql;
 	pthread_exit(NULL);
 }
 
@@ -43,6 +44,12 @@ public:
 
 		int rst = sqlite3_open("/home/georges/projects/Services/logs.db", &m_Logdb);
 		m_err = rst ? -1 : 0;
+
+		char * sql = "INSERT INTO AppLog VALUES ( ?, ?, ?, ?, ?, ?, ?, ? );";
+
+		m_err = sqlite3_prepare_v2(m_Logdb, sql, -1, &m_log, 0);
+		if (m_err)
+			fprintf(stderr, "Failed to execute statement %s with error: %s\n", sql, sqlite3_errmsg(m_Logdb));
 	}
 
 	~MainModule()
@@ -56,6 +63,7 @@ public:
 	size_t m_TotalDBElements[127];
 
 	sqlite3 *m_Logdb;
+	sqlite3_stmt *m_log;
 
 	// Add an database keyword in a sub module. This keyword shall be added into the properties before
 	bool AddDBElement(string keyword, long Channel)
@@ -296,12 +304,20 @@ public:
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
 
-		for (size_t i = 1; i < m_TotalServices; i++)
+		// Check the watchdog only in the second half of a second
+		if (tv.tv_usec < 500000)
+			return 0;
+
+		// m_Clients stores all onboard services
+		for (size_t i = 0; i < m_TotalClients; i++)
 		{
-			size_t index = m_ServiceChannels[i];
-			if (m_WatchdogTimer[index] > 0 && tv.tv_sec >= m_WatchdogTimer[index] + 5)
+			size_t index = m_Clients[i];
+			if (m_WatchdogTimer[index] && tv.tv_sec >= m_WatchdogTimer[index] + 5)
 			{
 				m_WatchdogTimer[index] = 0;
+				m_MsgTS_sec = tv.tv_sec;
+				m_MsgTS_usec = tv.tv_usec;
+				Log("Watchdog aleart. " + GetServiceTitle(index) + " stops responding on channel " + to_string(index));
 				return index;
 			}
 		}
@@ -317,16 +333,16 @@ public:
 		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
 		if (l < 0)
 		{
-			// Auto update the service data if enabled
-			if (m_AutoUpdate)
-				UpdateServiceData();
+			//// Auto update the service data if enabled
+			//if (m_AutoUpdate)
+			//	UpdateServiceData();
 
-			// Auto feed the watchdog if enabled.
-			if (m_AutoWatchdog)
-				WatchdogFeed();
+			//// Auto feed the watchdog if enabled.
+			//if (m_AutoWatchdog)
+			//	WatchdogFeed();
 
-			// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
-			if (m_AutoSleep)
+			//// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
+			//if (m_AutoSleep)
 				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
 			return 0;
@@ -365,6 +381,7 @@ public:
 		{
 		case CMD_ONBOARD:
 			// local log
+			msg = GetServiceTitle(m_MsgChn);
 			Log("A new service " + msg + " gets onboard at channel " + to_string(m_MsgChn));
 
 			// update onboard list which is stored at m_Clients[]
@@ -374,13 +391,13 @@ public:
 					break;
 			}
 			if (i >= m_TotalClients)
-				m_Clients[m_TotalClients] = m_MsgChn;
+				m_Clients[m_TotalClients++] = m_MsgChn;
 
 			// get the module pid and save it in m_Subscriptions[], reuse the storage
 			memcpy(&pid, m_buf.mText, sizeof(pid));
 			offset = sizeof(pid);
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
-			m_Subscriptions[m_TotalClients++] = pid;
+			m_Subscriptions[i] = pid;
 
 			// reply service list to sub-module next
 			ReplyServiceList();
@@ -392,7 +409,6 @@ public:
 
 			// reply the log severity level at the end
 			//TODO get the severity from database
-			msg = GetServiceTitle(m_MsgChn);
 			SndCmd("LogSeverityLevel=4", msg);
 
 			// local log
@@ -427,18 +443,16 @@ public:
 
 		case CMD_DOWN:
 			msg = GetServiceTitle(m_MsgChn);
-			// Test RequestServiceStatus here
-			// RequestModuleStatus();
+			Log("Service " + msg + " reports down. Informs every sub modules.");
 
 			// broadcast the message that one channel has down
 			InformDown();
-
-			Log("Service " + msg + " reports down. Informs every sub modules.");
 			return type;
 
 		// Auto parse the system configurations
 		case CMD_COMMAND:
 			msg.assign(m_buf.mText);
+			Log("Get a command: " + msg + " from " + GetServiceTitle(m_MsgChn));
 			offset = msg.find_first_of('=');  // find =
 			keyword = msg.substr(0, offset);  // keyword is left of =
 			msg = msg.substr(offset + 1); // now msg is right of =
@@ -490,7 +504,6 @@ public:
 					m_AutoSleep = false;
 			}
 			return type; // return when get a command. No more auto parse
-
 
 		case CMD_STATUS:
 			msg = GetServiceTitle(m_MsgChn);
@@ -561,31 +574,58 @@ public:
 		default:
 			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len));
 		}
+		return type;
 	}
 
 	// print the log from local with given severity
-	bool Log(string msg, char Severity)
+	bool Log(string msg, char Severity = 4)
 	{
 		if (Severity > m_Severity)
 			return false;
 
 		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
 		string sql = "INSERT INTO AppLog VALUES (";
-		char *zErrMsg = 0;
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
-		
-		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", 'MAIN', 1, ");
+
+		//int rst = sqlite3_bind_int(m_log, 1, tv.tv_sec);
+		//rst += sqlite3_bind_int(m_log, 2, tv.tv_usec);
+		//rst += sqlite3_bind_text(m_log, 3, "MAIN", -1, SQLITE_STATIC);
+		//rst += sqlite3_bind_int(m_log, 4, 1);
+		//rst += sqlite3_bind_int(m_log, 5, Severity);
+		//rst += sqlite3_bind_text(m_log, 6, msg.c_str(), -1, SQLITE_STATIC);
+		//rst += sqlite3_bind_int(m_log, 7, m_MsgTS_sec);
+		//rst += sqlite3_bind_int(m_log, 8, tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec);
+
+		//if (rst != SQLITE_OK)
+		//{
+		//	fprintf(stderr, "Error while bind parameters %d.\n", rst);
+		//	return false;
+		//}
+
+		//rst = sqlite3_step(m_log);
+
+		//if (rst != SQLITE_DONE)
+		//{
+		//	fprintf(stderr, "Cannot insert %s into the log database:%s\n", msg.c_str(), sqlite3_errmsg(m_Logdb));
+		//	return false;
+		//}
+		//rst = sqlite3_clear_bindings(m_log);
+		//return true;
+
+		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
+		sql.append(GetServiceTitle(m_MsgChn) + "', ");
+		sql.append(to_string(m_MsgChn) + ", ");
 		sql.append(to_string(Severity) + ", '");
-		sql.append(msg);
-		sql.append("', 0, 0);");
-		//cout << sql << endl;
+		sql.append(msg + "', ");
+		tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
+		sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
 		threadata->logDB = m_Logdb;
-		threadata->sql->assign(sql);
+		threadata->sql = new string(sql);
 
 		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
 		if (rst)
@@ -594,12 +634,6 @@ public:
 			return false;
 		}
 		return true;
-	}
-
-	// print local log with normal severity
-	bool Log(string msg)
-	{
-		return Log(msg, 4);
 	}
 	
 	// print the log from service module
@@ -620,21 +654,19 @@ public:
 		if (Severity < 1)
 			Severity = 1;
 
-		// cout << getDateTime(tv.tv_sec, tv.tv_usec) << " '" << GetServiceTitle(m_MsgChn) << "' [" << to_string(m_buf.mText[0]) << "] "
-		//	<< msg << " at " << getDateTime(m_MsgTS_sec, m_MsgTS_usec) << endl;
-
 		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
 		sql.append(GetServiceTitle(m_MsgChn) + "', ");
 		sql.append(to_string(m_MsgChn) + ", ");
 		sql.append(to_string(Severity) + ", '");
-		sql.append(msg);
-		sql.append("', " + to_string(m_MsgTS_sec) + ", " + to_string(m_MsgTS_usec) + ");");
+		sql.append(msg + "', ");
+		tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
+		sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
 		//cout << sql << endl;
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
 		threadata->logDB = m_Logdb;
-		threadata->sql->assign(sql);
+		threadata->sql = new string(sql);
 
 		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
 		if (rst)
@@ -642,6 +674,7 @@ public:
 			printf("Cannot create thread. %d\n", rst);
 			return false;
 		}
+		return true;
 	}
 
 	string getDateTime(time_t tv_sec, time_t tv_usec)
@@ -667,7 +700,6 @@ int main(int argc, char *argv[])
 	char serviceChannels[5] { 1,3,4,5,19 };
 	string sSeverity[6] { "Critical", "Error", "Warning", "Info", "Debug", "Verbose"};
 
-	char *bufMsg;
 	size_t typeMsg;
 	size_t len = 0;
 	size_t chn = 0;

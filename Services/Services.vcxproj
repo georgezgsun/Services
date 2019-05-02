@@ -86,8 +86,8 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Link>
       <SharedLibrarySearchPath>/usr/local/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
-      <LibraryDependencies>%(LibraryDependencies)</LibraryDependencies>
-      <AdditionalDependencies>/usr/local/lib/libsqlite3.so;%(AdditionalDependencies)</AdditionalDependencies>
+      <LibraryDependencies>pthread;sqlite3;%(LibraryDependencies)</LibraryDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -161,8 +161,12 @@ bool ServiceUtils::StartService()
 			Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
 
 		// Get initialization from the main module;
+		m_AutoUpdate = false;  // disable service data auto update during startup
+		m_AutoWatchdog = false; // disable watchdog auto feed during startup
+		m_AutoSleep = false;  // disable auto sleep during startup
+		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
+
 		count = 20;
-		struct timespec tim = { 0, 10000000L }; // 1ms = 1000000ns
 		do
 		{
 			ChkNewMsg();
@@ -170,12 +174,15 @@ bool ServiceUtils::StartService()
 
 			if (count-- <= 0)
 			{
-				Log("Cannot get the initialization messages from the main module in 5ms. Error: " + to_string(m_err), 1);
+				Log("Cannot get the initialization messages from the main module in 20ms. Error: " + to_string(m_err), 1);
 				m_err = -10;
 				return false;
 			}
 		} while (m_TotalServices <= 0);
-		Log(m_Title + " gets initialized in " + to_string(200 - count*10) + "ms", 4);
+		Log(m_Title + " gets initialized in " + to_string(20 - count) + "ms", 4);
+		m_AutoSleep = true;  // enable service data auto update after startup
+		m_AutoWatchdog = true; // enable watchdog auto feed after startup
+		m_AutoUpdate = true;  // enable service data auto feed after startup
 		
 		// Broadcast my onboard messages to all service channels other than the main module and myself
 		for (size_t i = 1; i < m_TotalServices; i++)
