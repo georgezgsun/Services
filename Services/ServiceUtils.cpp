@@ -753,7 +753,7 @@ size_t ServiceUtils::ChkNewMsg()
 				if (i > 0 && i < 7)
 					m_Severity = i;
 
-				if (!msg.compare("Information"))
+				if (!msg.compare("Info"))
 					m_Severity = 4;
 
 				if (!msg.compare("Debug"))
@@ -767,9 +767,9 @@ size_t ServiceUtils::ChkNewMsg()
 			// the flag update of auto service data update
 			if (!keyword.compare("AutoUpdate"))
 			{
-				if (msg.compare("on"))
+				if (!msg.compare("on"))
 					m_AutoUpdate = true;
-				if (msg.compare("off"))
+				if (!msg.compare("off"))
 					m_AutoUpdate = false;
 				return m_buf.type;
 			}
@@ -777,9 +777,9 @@ size_t ServiceUtils::ChkNewMsg()
 			// the flag update of the watchdog auto feed 
 			if (!keyword.compare("AutoWatchdog"))
 			{
-				if (msg.compare("on"))
+				if (!msg.compare("on"))
 					m_AutoWatchdog = true;
-				if (msg.compare("off"))
+				if (!msg.compare("off"))
 					m_AutoWatchdog = false;
 				return m_buf.type;
 			}
@@ -787,9 +787,9 @@ size_t ServiceUtils::ChkNewMsg()
 			// the flag update of auto sleep
 			if (!keyword.compare("AutoSleep"))
 			{
-				if (msg.compare("on"))
+				if (!msg.compare("on"))
 					m_AutoSleep = true;
-				if (msg.compare("off"))
+				if (!msg.compare("off"))
 					m_AutoSleep = false;
 			}
 			return type; // return when get a command. No more auto parse
