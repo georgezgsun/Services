@@ -77,7 +77,7 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(ProjectDir)libs</OutDir>
+    <OutDir>$(RemoteRootDir)\lib</OutDir>
   </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="..\Services\ServiceUtils.cpp" />

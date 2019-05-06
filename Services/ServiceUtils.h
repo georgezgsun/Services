@@ -74,7 +74,7 @@ protected:
 
 	size_t m_HeaderLength;  // The header length of message
 	int m_Severity; // The level of the log;  1-Critical, 2-Error, 3-Warning, 4-Information, 5-Debug, 6-Verbose;
-	bool m_AutoUpdate;  // Enable service data been auto updated during ChkNewMsg
+	bool m_AutoPublish;  // Enable service data been auto updated during ChkNewMsg
 	bool m_AutoWatchdog; // Enable watchdog been auto feed during ChkNewMsg
 	bool m_AutoSleep;  // Enable auto sleep during ChkNewMsg
 
@@ -104,7 +104,7 @@ public:
 	bool SndCmd(string msg, string ServiceTitle); // Send a command in string to specified service provider
 	bool SndMsg(void *p, size_t type, size_t len, long ServiceChannel); // Send a packet with given length to specified service provider with channel
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
-	bool UpdateServiceData(); // update and broadcast the service data if any data are changed
+	bool PublishServiceData(); // update and broadcast the service data if any data are changed
 
 	size_t ChkNewMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
 	string GetRcvMsg(); // receive a text message from specified service provider, like GPS, RADAR, TRIGGER.

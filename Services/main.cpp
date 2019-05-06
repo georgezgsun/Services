@@ -39,7 +39,7 @@ public:
 	MainModule()
 	{
 		m_AutoSleep = true;  // Auto sleep is also enabled in main
-		m_AutoUpdate = false; // No auto update for service data in main. The m_ServiceData is reused by service list
+		m_AutoPublish = false; // No auto update for service data in main. The m_ServiceData is reused by service list
 		m_AutoWatchdog = false; // No auto watchdog feed at main
 	}
 
@@ -74,7 +74,7 @@ public:
 		}
 
 		// connect the logs database
-		int rst = sqlite3_open("/home/georges/projects/Services/logs.db", &m_Logdb);
+		int rst = sqlite3_open("/home/george/projects/Services/logs.db", &m_Logdb);
 		if (rst)
 		{
 			m_err = -2;
@@ -83,7 +83,7 @@ public:
 		}
 
 		// connect the configure database
-		rst = sqlite3_open("/home/georges/projects/Services/Roswell.db", &m_Confdb);
+		rst = sqlite3_open("/home/george/projects/Services/Roswell.db", &m_Confdb);
 		if (rst)
 		{
 			m_err = -3;
@@ -121,6 +121,7 @@ public:
 		int ID;
 		string ConfTable;
 		string tmp;
+		const unsigned char *read;
 
 		// assign main module manually here
 		m_TotalProperties = 0;
@@ -158,20 +159,28 @@ public:
 			m_TotalServices = sqlite3_column_int(m_ConfStatement[0], 0);  // The ID
 			m_ServiceTitles[m_TotalServices].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 1)); // The service title
 			m_ServiceChannels[m_TotalServices] = sqlite3_column_int(m_ConfStatement[0], 2);  // The channel
-			m_ModulePath[m_TotalServices].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 3));  // The module path
-			m_ConfTable[m_TotalServices].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 4));  // The config table
-			tmp.assign((const char*)sqlite3_column_text(m_ConfStatement[0], 5)); // The watchdog reload, restart, or reboot
+			read = sqlite3_column_text(m_ConfStatement[0], 3); 
+			if (read)
+				m_ModulePath[m_TotalServices].assign((const char*)read);  // The module path
+			else
+				m_ModulePath[m_TotalServices].clear(); // in case it is null
+			read =sqlite3_column_text(m_ConfStatement[0], 4);
+			if (read)
+				m_ConfTable[m_TotalServices].assign((const char*)read);  // The config table
+			else
+				m_ConfTable[m_TotalServices].clear();  // in case it is null
+			read =sqlite3_column_text(m_ConfStatement[0], 5); // The watchdog reload, restart, or reboot
 			m_ActionWatchdog[m_TotalServices] = 0;
-			if (!tmp.compare("restart"))
+			if (!strcmp((const char*)read, "restart"))
 				m_ActionWatchdog[m_TotalServices] = 1;
-			if (!tmp.compare("reboot"))
+			if (!strcmp((const char*)read, "reboot"))
 				m_ActionWatchdog[m_TotalServices] = 2;
 
-			tmp.assign((const char*)sqlite3_column_text(m_ConfStatement[0], 6)); //  The log severity level Info, Debug, Verbose
+			read = sqlite3_column_text(m_ConfStatement[0], 6); //  The log severity level Info, Debug, Verbose
 			m_LogSeverityLevel[m_TotalServices] = 4;
-			if (!tmp.compare("Debug"))
+			if (!strcmp((const char*)read, "Debug"))
 				m_LogSeverityLevel[m_TotalServices] = 5;
-			if (!tmp.compare("Verbose"))
+			if (!strcmp((const char*)read, "Verbose"))
 				m_LogSeverityLevel[m_TotalServices] = 6;
 
 			// prepare the service list
@@ -182,12 +191,12 @@ public:
 			// prepare the query of configure table
 			int offset = m_ConfTable[m_TotalServices].find_first_of(':'); // position of :
 			ConfTable = m_ConfTable[m_TotalServices].substr(0, offset); // table title is the left of the :
-			ID = atoi(m_ConfTable[m_TotalServices].substr(offset + 1).c_str()); // ID number is the right of :
-			if (!ID)
-				ID = 1;
+			ID = atoi(m_ConfTable[m_TotalServices].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
 			string Statement("SELECT * FROM ");
 			Statement.append(ConfTable);
-			Statement.append(" WHERE ID=" + to_string(ID) + ";");
+			if (ID)  // any positive number means to query only that ID
+				Statement.append(" WHERE ID=" + to_string(ID));
+			Statement.append(";");
 			m_err = sqlite3_prepare_v2(m_Confdb, Statement.c_str(), Statement.length(), &m_ConfStatement[m_TotalServices], 0);
 			if (m_err)
 			{
@@ -264,82 +273,100 @@ public:
 		if (i >= m_TotalServices)
 			return false;  // no such a service channel in the list
 
-		// query the configure table
-		m_err = sqlite3_reset(m_ConfStatement[i]);
-		m_err = sqlite3_step(m_ConfStatement[i]);
-		if (m_err != SQLITE_ROW)
+		// query multiple rows in case need to transfer the whole table
+		int ID{ 0 };
+		const unsigned char *read;
+		m_err = sqlite3_reset(m_ConfStatement[i]);  // reset the query statement only once
+		do
 		{
-			fprintf(stderr, "Failed to query config table of %s with error:%s.\n", GetServiceTitle(m_MsgChn).c_str(), sqlite3_errmsg(m_Confdb));
-			m_err = -6;
-			return false;
-		}
-		
-		int n;
-		double t;
-		size_t offset = 0;
-		int count = sqlite3_column_count(m_ConfStatement[i]); // find the total column number other than ID
-
-		// gets each column and put them into the database query reply
-		// There is a risk that offset may exceed 255 in case too many elements or too long the content.
-		for (size_t j = 1; j < count; j++)
-		{
-			// assign the column name to be the keyword
-			tmp.assign((const char*)sqlite3_column_name(m_ConfStatement[i], j));
-			strcpy(m_buf.mText + offset, tmp.c_str());
-			offset += tmp.length() + 1;
-
-			switch (sqlite3_column_type(m_ConfStatement[i], j))
+			// query the configure table
+			m_err = sqlite3_step(m_ConfStatement[i]);
+			if (m_err != SQLITE_ROW)
 			{
-			case SQLITE_INTEGER:
-				m_buf.mText[offset++] = sizeof(int);
-				n = sqlite3_column_int(m_ConfStatement[i], j);
-				memcpy(m_buf.mText + offset, &n, sizeof(int));
-				offset += sizeof(int);
-				break;
+				if (!ID) // if get no successful query before
+				{
+					fprintf(stderr, "Failed to query config table of %s with error:%s.\n", GetServiceTitle(m_MsgChn).c_str(), sqlite3_errmsg(m_Confdb));
+					m_err = -6;
+					return false;
+				}
+				return true;
+			}
 
-			case SQLITE_FLOAT:
-				m_buf.mText[offset++] = sizeof(double);
-				t = sqlite3_column_double(m_ConfStatement[i], j);
-				memcpy(m_buf.mText + offset, &t, sizeof(double));
-				offset += sizeof(double);
-				break;
+			int n;
+			double t;
+			size_t offset = 0;
+			int count = sqlite3_column_count(m_ConfStatement[i]); // find the total column number other than ID
 
-			case SQLITE_TEXT:
-				m_buf.mText[offset++] = 0;
-				tmp.assign((const char *) (sqlite3_column_text(m_ConfStatement[i], j)));
+			// gets each column and put them into the database query reply
+			// There is a risk that offset may exceed 255 in case too many elements or too long the content.
+			for (size_t j = 0; j < count; j++)
+			{
+				// assign the column name to be the keyword
+				tmp.assign((const char*)sqlite3_column_name(m_ConfStatement[i], j));
 				strcpy(m_buf.mText + offset, tmp.c_str());
 				offset += tmp.length() + 1;
-				break;
 
-			case SQLITE_BLOB:
-				n = sqlite3_column_bytes(m_ConfStatement[i], j);
-				m_buf.mText[offset++] = n;
-				memcpy(m_buf.mText + offset, sqlite3_column_blob(m_ConfStatement[i], j), n);
-				offset += n;
-				break;
+				switch (sqlite3_column_type(m_ConfStatement[i], j))
+				{
+				case SQLITE_INTEGER:
+					m_buf.mText[offset++] = sizeof(int);
+					n = sqlite3_column_int(m_ConfStatement[i], j);
+					memcpy(m_buf.mText + offset, &n, sizeof(int));
+					offset += sizeof(int);
+					if (!tmp.compare("ID"))
+						ID = n;
+					break;
 
-			default:
-				m_err = -6;
-				fprintf(stderr, "Unaware type of column queried at %s\n.", m_pptr[m_TotalProperties]->keyword.c_str());
+				case SQLITE_FLOAT:
+					m_buf.mText[offset++] = sizeof(double);
+					t = sqlite3_column_double(m_ConfStatement[i], j);
+					memcpy(m_buf.mText + offset, &t, sizeof(double));
+					offset += sizeof(double);
+					break;
+
+				case SQLITE_TEXT:
+					m_buf.mText[offset++] = 0;
+					read = sqlite3_column_text(m_ConfStatement[i], j);
+					if (read)
+					{
+						strcpy(m_buf.mText + offset, (const char*)read);
+						offset += strlen((const char*)read) + 1;
+					}
+					else
+						m_buf.mText[offset++] = 0; // for a NULL element, add /0 anyway
+					break;
+
+				case SQLITE_BLOB: // not sure for a length of 0?
+					n = sqlite3_column_bytes(m_ConfStatement[i], j);
+					m_buf.mText[offset++] = n;
+					memcpy(m_buf.mText + offset, sqlite3_column_blob(m_ConfStatement[i], j), n);
+					offset += n;
+					break;
+
+				default:
+					m_err = -6;
+					fprintf(stderr, "Unaware type of column queried at %s\n.", m_pptr[m_TotalProperties]->keyword.c_str());
+					return false;
+				}
+			}
+
+			if (offset > 255)
+			{
+				m_err = -7;
+				Log("Critical error when query the configuration table of " + GetServiceTitle(m_MsgChn) + ". Total bytes %d grows too many.\n", 1);
 				return false;
 			}
-		}
 
-		if (offset > 255)
-		{
-			m_err = -7;
-			Log("Critical error when query the configuration table of " + GetServiceTitle(m_MsgChn) + ". Total bytes %d grows too many.\n", 1);
-			return false;
-		}
+			m_buf.len = offset;
+			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+			{
+				m_err = errno;
+				return false;
+			}
+			m_err = 0;
+			m_TotalMessageSent++;
+		} while (true);
 
-		m_buf.len = offset;
-		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-		{
-			m_err = errno;
-			return false;
-		}
-		m_err = 0;
-		m_TotalMessageSent++;
 		return true;
 	}
 
@@ -475,7 +502,6 @@ public:
 
 		string keyword;
 		string msg;
-		char Severity;
 
 		// reset the watchdog timer for that channel
 		m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; 
@@ -510,20 +536,18 @@ public:
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
 			m_Pids[i] = pid;
 
-			// reply service list to sub-module next
-			ReplyServiceList();
-			Log("Replies the service list to channel " + to_string(m_MsgChn));
-
 			// reply databse query first
 			ReplyDBQuery();
 			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn));
 
-			// reply the log severity level at the end
-			//TODO get the severity from database
-			SndCmd("LogSeverityLevel=4", msg);
+			// reply the log severity level next
+			SndCmd("LogSeverityLevel=" + to_string(m_LogSeverityLevel[i]), msg);
+			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[i]) + " to " + msg);
 
-			// local log
-			Log("Send the command LogSeverityLevel=4 to " + msg);
+			// reply service list to sub-module at the end
+			ReplyServiceList();
+			Log("Replies the service list to channel " + to_string(m_MsgChn));
+
 			return type;
 
 		case CMD_DATABASEUPDATE:
@@ -590,9 +614,9 @@ public:
 			if (!keyword.compare("AutoUpdate"))
 			{
 				if (!msg.compare("on"))
-					m_AutoUpdate = true;
+					m_AutoPublish = true;
 				if (!msg.compare("off"))
-					m_AutoUpdate = false;
+					m_AutoPublish = false;
 				return m_buf.type;
 			}
 
@@ -725,13 +749,15 @@ public:
 		//rst = sqlite3_clear_bindings(m_log);
 		//return true;
 
-		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
-		sql.append(GetServiceTitle(m_MsgChn) + "', ");
-		sql.append(to_string(m_MsgChn) + ", ");
+		//sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
+		//sql.append(GetServiceTitle(m_MsgChn) + "', ");
+		//sql.append(to_string(m_MsgChn) + ", ");
+		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec));
+		sql.append(", 'MAIN', 1, ");
 		sql.append(to_string(Severity) + ", '");
-		sql.append(msg + "', ");
-		tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
-		sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
+		sql.append(msg + "', 0, 0);");
+		//tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
+		//sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
@@ -752,7 +778,6 @@ public:
 	{
 		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
 		string sql = "INSERT INTO AppLog VALUES ( ";
-		char *zErrMsg = 0;
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);

@@ -25,15 +25,27 @@ int main(int argc, char *argv[])
 {
 	ServiceUtils *tester = new ServiceUtils(argc, argv);
 
+	int ID{ 0 };
 	int baudrate{ 0 };
 	string GPSType;
 	int last_baudrate{ 0 };
 	string position = "3258.1187N,09642.9508W";
 	int height = 202;
 	int time;
+	string ActiveTriggers;
+	string OptionTriggers;
+	int SpeedUp;
+	int SpeedDown;
+	int lastSpeed{ 0 };
 
-	tester->LocalMap("BAUDRATE", &baudrate);
-	tester->LocalMap("TYPE", &GPSType);
+	tester->LocalMap("ID", &ID);
+	tester->LocalMap("BaudRate", &baudrate);
+	tester->LocalMap("Type", &GPSType);
+
+	tester->LocalMap("Active Triggers", &ActiveTriggers);
+	tester->LocalMap("Optiona Triggers", &OptionTriggers);
+	tester->LocalMap("Speed up", &SpeedUp);
+	tester->LocalMap("Speed down", &SpeedDown);
 
 	tester->AddToServiceData("position", &position);
 	tester->AddToServiceData("latitute", &height);
@@ -88,15 +100,28 @@ int main(int argc, char *argv[])
 
 		if (last_baudrate != baudrate)
 		{
-			cout << datetime << " : " << myTitle << " gets configured as BAUDRATE=" << baudrate 
-				<< " and GPS type=" << GPSType << ".\n";
+			cout << datetime << " : " << myTitle << " gets configured as ID=" << ID 
+				<< " baud rate=" << baudrate 
+				<< " and type=" << GPSType << ".\n";
 			last_baudrate = baudrate;
+		}
+
+		if (lastSpeed != SpeedUp)
+		{
+			cout << datetime << " : " << myTitle
+				<< " gets configured as ID=" << ID
+				<< ", active triggers: " << ActiveTriggers
+				<< ", optional triggers: " << OptionTriggers
+				<< ", GPS speed trigger at " << SpeedUp
+				<< ", GPS speed cancel at " << SpeedDown
+				<< endl;
+			lastSpeed = SpeedUp;
 		}
 
 		// provide service here
 		// get GPS from UART
 		// if GPS changed
-		//   UpdateServiceData
+		//   PublishServiceData
 		// provide service here
 
 		if (tester->WatchdogFeed())

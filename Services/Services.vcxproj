@@ -75,7 +75,11 @@
   <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>/usr/local/include;/usr/include;$(IncludePath)</IncludePath>
+    <LibraryPath>/usr/local/lib;$(LibraryPath)</LibraryPath>
+    <SourcePath>/usr/include;/usr/local/include;$(SourcePath)</SourcePath>
+  </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ServiceUtils.cpp" />
@@ -85,7 +89,7 @@
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Link>
-      <SharedLibrarySearchPath>/usr/local/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
+      <SharedLibrarySearchPath>/usr/local/lib;/usr/include;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
       <LibraryDependencies>pthread;sqlite3;%(LibraryDependencies)</LibraryDependencies>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>

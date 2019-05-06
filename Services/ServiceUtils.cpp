@@ -38,7 +38,7 @@ ServiceUtils::ServiceUtils()
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
 	m_Severity = 4;  // Information
-	m_AutoUpdate = true;  // Enable service data auto update by default
+	m_AutoPublish = true;  // Enable service data auto update by default
 	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
 	m_AutoSleep = true; // Enable auto sleep by default
 
@@ -99,7 +99,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
 	m_Severity = 4;
-	m_AutoUpdate = true;  // Enable service data auto update by default
+	m_AutoPublish = true;  // Enable service data auto update by default
 	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
 	m_AutoSleep = true; // Enable auto sleep by default
 
@@ -125,71 +125,59 @@ bool ServiceUtils::StartService()
 
 	// The initialization of the main module and other service providers are different
 	if (m_Chn == 1)
-	{
-		// Read off all previous messages in the queue at main module starts
-		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), 0, IPC_NOWAIT) > 0)
-			count++;
-
-		// For debug only
-		Log("There are " + to_string(count) + " stale messages in main module's message queue.", 5);
-		m_err = 0;
 		return true;
-	}
-	else
+
+	char txt[255];
+	pid_t pid = getpid();
+	pid_t ppid = getppid();
+
+	// Read off all messages to me in the queue before I startup
+	while (msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT) > 0)
 	{
-		char txt[255];
-		pid_t pid = getpid();
-		pid_t ppid = getppid();
+		count++;
+		m_TotalMessageReceived++;
+	}
 
-		// Read off all messages to me in the queue before I startup
-		while (msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT) > 0)
-		{
-			count++;
-			m_TotalMessageReceived++;
-		}
+	// Report onboard to the main module
+	strcpy(txt, m_Title.c_str());
+	size_t len = m_Title.length() + 1;
+	memcpy(txt + len, &pid, len);
+	len += sizeof(pid);
+	memcpy(txt + len, &ppid, len);
+	len += sizeof(pid);
+	SndMsg(txt, CMD_ONBOARD, len, 1);
 
-		// Report onboard to the main module
-		strcpy(txt, m_Title.c_str());
-		size_t len = m_Title.length() + 1;
-		memcpy(txt + len, &pid, len);
-		len += sizeof(pid);
-		memcpy(txt + len, &ppid, len);
-		len += sizeof(pid);
-		SndMsg(txt, CMD_ONBOARD, len, 1);
+	if (count)
+		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
 
-		if (count)
-			Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
+	// Get initialization from the main module;
+	m_AutoPublish = false;  // disable service data auto update during startup
+	m_AutoWatchdog = false; // disable watchdog auto feed during startup
+	m_AutoSleep = false;  // disable auto sleep during startup
+	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
 
-		// Get initialization from the main module;
-		m_AutoUpdate = false;  // disable service data auto update during startup
-		m_AutoWatchdog = false; // disable watchdog auto feed during startup
-		m_AutoSleep = false;  // disable auto sleep during startup
-		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
-
-		count = 20;
-		do
-		{
-			ChkNewMsg();
+	count = 0;
+	do
+	{
+		if (!ChkNewMsg())
 			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
-			if (count-- <= 0)
-			{
-				Log("Cannot get the initialization messages from the main module in 20ms. Error: " + to_string(m_err), 1);
-				m_err = -10;
-				return false;
-			}
-		} while (m_TotalServices <= 0);
-		Log(m_Title + " gets initialized in " + to_string(20 - count) + "ms", 4);
-		m_AutoSleep = true;  // enable service data auto update after startup
-		m_AutoWatchdog = true; // enable watchdog auto feed after startup
-		m_AutoUpdate = true;  // enable service data auto feed after startup
+		if (count++ >= 100)
+		{
+			Log("Cannot get the initialization messages from the main module in 100ms. Error: " + to_string(m_err), 1);
+			m_err = -10;
+			return false;
+		}
+	} while (m_TotalServices <= 0);
+	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 4);
+	m_AutoSleep = true;  // enable service data auto update after startup
+	m_AutoWatchdog = true; // enable watchdog auto feed after startup
+	m_AutoPublish = true;  // enable service data auto feed after startup
 		
-		// Broadcast my onboard messages to all service channels other than the main module and myself
-		for (size_t i = 1; i < m_TotalServices; i++)
-			SndMsg(txt, CMD_ONBOARD, len, m_ServiceChannels[i]);
+	// Broadcast my onboard messages to all service channels other than the main module and myself
+	for (size_t i = 1; i < m_TotalServices; i++)
+		SndMsg(txt, CMD_ONBOARD, len, m_ServiceChannels[i]);
 
-		return true;
-	}
 	return true;
 }
 
@@ -387,7 +375,7 @@ bool ServiceUtils::ServiceQuery(string ServiceTitle)
 }
 
 // broadcast the service data to all clients
-bool ServiceUtils::UpdateServiceData()
+bool ServiceUtils::PublishServiceData()
 {
 	if (m_ID == -1)
 	{
@@ -478,8 +466,8 @@ size_t ServiceUtils::ChkNewMsg()
 		if (l < 0)
 		{
 			// Auto update the service data if enabled
-			if (m_AutoUpdate)
-				UpdateServiceData();
+			if (m_AutoPublish)
+				PublishServiceData();
 
 			// Auto feed the watchdog if enabled.
 			if (m_AutoWatchdog)
@@ -768,9 +756,9 @@ size_t ServiceUtils::ChkNewMsg()
 			if (!keyword.compare("AutoUpdate"))
 			{
 				if (!msg.compare("on"))
-					m_AutoUpdate = true;
+					m_AutoPublish = true;
 				if (!msg.compare("off"))
-					m_AutoUpdate = false;
+					m_AutoPublish = false;
 				return m_buf.type;
 			}
 
@@ -830,7 +818,7 @@ size_t ServiceUtils::ChkNewMsg()
 			offset += 7;
 			m_buf.mText[offset++] = 0; // it is a string
 			m_buf.mText[offset++] = m_Severity & 0xFF;
-			m_buf.mText[offset++] = m_AutoUpdate ? 1 : 0;
+			m_buf.mText[offset++] = m_AutoPublish ? 1 : 0;
 			m_buf.mText[offset++] = m_AutoWatchdog ? 1 : 0;
 			m_buf.mText[offset++] = m_AutoSleep ? 1 : 0;
 			m_buf.mText[offset++] = 0; // end of the string

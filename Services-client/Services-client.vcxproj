@@ -83,8 +83,8 @@
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Link>
-      <AdditionalLibraryDirectories>C:\Users\georges\source\repos\Services\ServicesUtils\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <SharedLibrarySearchPath>C:\Users\georges\source\repos\Services\ServicesUtils\libs;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <SharedLibrarySearchPath>$(RemoteRootDir)/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
       <AdditionalDependencies>~/projects/ServicesUtils/libs/libServicesUtils.so;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
