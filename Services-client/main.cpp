@@ -43,9 +43,9 @@ int main(int argc, char *argv[])
 	tester->LocalMap("Type", &GPSType);
 
 	tester->LocalMap("Active Triggers", &ActiveTriggers);
-	tester->LocalMap("Optiona Triggers", &OptionTriggers);
-	tester->LocalMap("Speed up", &SpeedUp);
-	tester->LocalMap("Speed down", &SpeedDown);
+	tester->LocalMap("Optional Triggers", &OptionTriggers);
+	tester->LocalMap("GPS Speeding Threshold", &SpeedUp);
+	tester->LocalMap("GPS Speeding Cancel", &SpeedDown);
 
 	tester->AddToServiceData("position", &position);
 	tester->AddToServiceData("latitute", &height);
@@ -67,8 +67,7 @@ int main(int argc, char *argv[])
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
-//	int lastPreEvent = 1;
-	int count = 5;
+	int count = myChannel;
 
 	string msg;
 	while (true)
@@ -108,13 +107,12 @@ int main(int argc, char *argv[])
 
 		if (lastSpeed != SpeedUp)
 		{
-			cout << datetime << " : " << myTitle
-				<< " gets configured as ID=" << ID
-				<< ", active triggers: " << ActiveTriggers
-				<< ", optional triggers: " << OptionTriggers
-				<< ", GPS speed trigger at " << SpeedUp
-				<< ", GPS speed cancel at " << SpeedDown
-				<< endl;
+			cout << datetime << " : \n" << myTitle
+				<< " gets configured as: \nID=" << ID << endl
+				<< "Active Triggers: " << ActiveTriggers << endl
+				<< "Optional Triggers: " << OptionTriggers << endl
+				<< "GPS Speeding Threshold: " << SpeedUp << endl
+				<< "GPS Speeding Cancel: " << SpeedDown << endl;
 			lastSpeed = SpeedUp;
 		}
 
@@ -127,11 +125,16 @@ int main(int argc, char *argv[])
 		if (tester->WatchdogFeed())
 		{
 			count--;
-			cout << datetime << " : Count down " << count << endl;
+			cout << datetime << " : " << myTitle << " counts down " << count << endl;
 
 			if (count <= 0)
+			{
+				//count = 5;
+				//break;
+				sleep(10);
+				cout << myTitle << " is still running." << endl;
 				break;
-
+			}
 		}
 	}
 }

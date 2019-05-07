@@ -77,7 +77,9 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(RemoteRootDir)\lib</OutDir>
+    <IncludePath>/usr/local/include;/usr/include;$(IncludePath)</IncludePath>
+    <LibraryPath>/usr/lib;/usr/local/lib;$(RemoteRootDir)/lib;$(LibraryPath)</LibraryPath>
+    <SourcePath>/usr/include;/usr/local/include;$(SourcePath)</SourcePath>
   </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="..\Services\ServiceUtils.cpp" />
@@ -85,7 +87,11 @@
   <ItemGroup>
     <ClInclude Include="..\Services\ServiceUtils.h" />
   </ItemGroup>
-  <ItemDefinitionGroup />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <RemotePostBuildEvent>
+      <Command>cp $(RemoteTargetPath) $(RemoteRootDir)/lib</Command>
+    </RemotePostBuildEvent>
+  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

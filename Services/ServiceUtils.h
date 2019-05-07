@@ -110,9 +110,9 @@ public:
 	string GetRcvMsg(); // receive a text message from specified service provider, like GPS, RADAR, TRIGGER.
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
-	bool WatchdogFeed(); // smart feed the watchdog in main module
-	bool Log(string logContent, char Severity); // Send a log to log main module. It is controlled by log level
-	bool Log(string logContent); // Send a log to log main module. Severe level of this log is set to default value 4 Information
+	bool WatchdogFeed(); // smart feed the watchdog for this module in main module
+	bool Log(string logContent, char Severity); // Send a log to main module which will save this log into database. It is controlled by log level
+	bool Log(string logContent); // Send a log to main module which will save this log into database. It is controlled by log level
 
 	bool LocalMap(string keyword, void *p, char len); // map local *p with length len (0 for string) to be one of the local property, function in database actions and messages
 	bool LocalMap(string keyword, string *s); // assign string *s to be one of the local property, function in database actions and messages
@@ -122,6 +122,8 @@ public:
 	bool AddToServiceData(string keyword, string *s); // assign string *s to be element of the service data
 	bool AddToServiceData(string keyword, int *n); // assign int *n to be element of the service data
 
-	bool dbQuery(); // query the database. The result will be placed in variables linked to the keyword before.
-	bool dbUpdate(); // update the database with variables linked to the keyword before.
+	 // send a command to the main module to ask for configures from the database. 
+	// The results will be auto parsed in ChkNewMsg() where configures are stored in variables mapped before or later.
+	bool AskforConfigures();
+	bool UpdateConfigures(); // send the configures back to main module and update the corresponding tables in the database.
 };

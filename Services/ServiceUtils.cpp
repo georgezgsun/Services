@@ -141,14 +141,15 @@ bool ServiceUtils::StartService()
 	// Report onboard to the main module
 	strcpy(txt, m_Title.c_str());
 	size_t len = m_Title.length() + 1;
-	memcpy(txt + len, &pid, len);
+	memcpy(txt + len, &pid, sizeof(pid));
 	len += sizeof(pid);
-	memcpy(txt + len, &ppid, len);
-	len += sizeof(pid);
+	memcpy(txt + len, &ppid, sizeof(ppid));
+	len += sizeof(ppid);
 	SndMsg(txt, CMD_ONBOARD, len, 1);
 
 	if (count)
 		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
+	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
 	// Get initialization from the main module;
 	m_AutoPublish = false;  // disable service data auto update during startup
@@ -164,7 +165,8 @@ bool ServiceUtils::StartService()
 
 		if (count++ >= 100)
 		{
-			Log("Cannot get the initialization messages from the main module in 100ms. Error: " + to_string(m_err), 1);
+			Log("Cannot get the initialization messages from the main module in " 
+				+ to_string(count) + "ms. Error: " + to_string(m_err), 1);
 			m_err = -10;
 			return false;
 		}
@@ -753,7 +755,7 @@ size_t ServiceUtils::ChkNewMsg()
 			}
 
 			// the flag update of auto service data update
-			if (!keyword.compare("AutoUpdate"))
+			if (!keyword.compare("AutoPublish"))
 			{
 				if (!msg.compare("on"))
 					m_AutoPublish = true;
@@ -923,7 +925,7 @@ bool ServiceUtils::WatchdogFeed()
 
 // Send a Log to main module with specified severe level
 // Sending format is [LogType][LogContent]
-bool ServiceUtils::Log(string LogContent, char Severity)
+bool ServiceUtils::Log(string logContent, char Severity)
 {
 	// Message queue has not been opened
 	if (m_ID == -1)
@@ -942,11 +944,11 @@ bool ServiceUtils::Log(string LogContent, char Severity)
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
-	m_buf.len = LogContent.length() + sizeof(Severity) + 1;
+	m_buf.len = logContent.length() + sizeof(Severity) + 1;
 	m_buf.type = CMD_LOG;
 
 	memcpy(m_buf.mText, &Severity, sizeof(Severity));
-	memcpy(m_buf.mText + sizeof(Severity), LogContent.c_str(), LogContent.length() + 1);
+	memcpy(m_buf.mText + sizeof(Severity), logContent.c_str(), logContent.length() + 1);
 	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
 		m_err = errno;
@@ -959,10 +961,9 @@ bool ServiceUtils::Log(string LogContent, char Severity)
 	return true;
 };
 
-// Send a log to main with severe level 4
-bool ServiceUtils::Log(string LogContent)
+bool ServiceUtils::Log(string logContent)
 {
-	return Log(LogContent, 4);
+	return Log(logContent, 4);
 }
 
 // assign *p to store the variable queried from the database with length len, len=0 for string
@@ -1080,7 +1081,7 @@ bool ServiceUtils::AddToServiceData(string keyword, int *n)
 }
 
 // Send a request to database main module to query for the value of keyword. The results will sent back automatically by main module.
-bool ServiceUtils::dbQuery()
+bool ServiceUtils::AskforConfigures()
 {
 	if (m_Chn == 1)
 		return false; // No database query for the main module
@@ -1091,7 +1092,7 @@ bool ServiceUtils::dbQuery()
 // Send a request to database to update all the values of keywords with newvalue. The database main module will take care of the data type casting. 
 // [keyword_1][type_1][len_1][data_1][keyword_2][type_2][len_2][data_2] ... [keyword_n][type_n][len_n][data_n] ; 
 // end with keyword empty, type and length are of size 1 byte, keyword end with /0
-bool ServiceUtils::dbUpdate()
+bool ServiceUtils::UpdateConfigures()
 {
 	if (m_ID == -1)
 	{

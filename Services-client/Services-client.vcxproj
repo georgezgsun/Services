@@ -34,6 +34,9 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{1ee2c450-655c-4f84-84e6-7f3d8abaa5f0}</ProjectGuid>
     <Keyword>Linux</Keyword>
@@ -76,17 +79,20 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <ProjectPublicIncludePath>C:\Users\georges\source\repos\Services\Services;$(ProjectPublicIncludePath)</ProjectPublicIncludePath>
+    <IncludePath>/usr/include;/usr/local/include</IncludePath>
+    <LibraryPath>/usr/lib;/usr/local/lib</LibraryPath>
+    <SourcePath>/usr/include;/usr/local/include</SourcePath>
   </PropertyGroup>
-  <ItemGroup>
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Link>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(RemoteRootDir)/lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <SharedLibrarySearchPath>$(RemoteRootDir)/lib;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
-      <AdditionalDependencies>~/projects/ServicesUtils/libs/libServicesUtils.so;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(RemoteRootDir)/lib/libServicesUtils.so;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <RemotePostBuildEvent />
+    <RemotePostBuildEvent>
+      <Message>copy the built library to the default path</Message>
+    </RemotePostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

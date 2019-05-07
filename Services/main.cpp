@@ -8,6 +8,8 @@
 #include <string.h>
 #include <sqlite3.h>
 #include <pthread.h>
+#include <signal.h>
+
 #include "ServiceUtils.h"
 
 using namespace std;
@@ -74,7 +76,7 @@ public:
 		}
 
 		// connect the logs database
-		int rst = sqlite3_open("/home/george/projects/Services/logs.db", &m_Logdb);
+		int rst = sqlite3_open("/home/georges/projects/Services/logs.db", &m_Logdb);
 		if (rst)
 		{
 			m_err = -2;
@@ -83,7 +85,7 @@ public:
 		}
 
 		// connect the configure database
-		rst = sqlite3_open("/home/george/projects/Services/Roswell.db", &m_Confdb);
+		rst = sqlite3_open("/home/georges/projects/Services/Roswell.db", &m_Confdb);
 		if (rst)
 		{
 			m_err = -3;
@@ -102,7 +104,7 @@ public:
 
 		// query the startup table in configure database
 		sql = "SELECT * FROM STARTUP;";
-		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[0], 0);
+		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[1], 0); // the main module config query statement
 		if (m_err)
 		{
 			fprintf(stderr, "Failed to prepare the query of startup table with error:%s.\n", sqlite3_errmsg(m_Confdb));
@@ -124,17 +126,18 @@ public:
 		const unsigned char *read;
 
 		// assign main module manually here
+		int Chn = 1;
 		m_TotalProperties = 0;
 		m_ServiceDataLength = 0;
-		m_ServiceTitles[m_TotalProperties] = "MAIN";
-		m_ServiceChannels[m_TotalProperties] = 1;
-		m_ModulePath[m_TotalProperties] = "";
-		m_ConfTable[m_TotalProperties] = "";
-		m_ActionWatchdog[m_TotalProperties] = 2;
-		m_LogSeverityLevel[m_TotalProperties] = 4;
-		m_ServiceData[m_ServiceDataLength++] = m_ServiceChannels[m_TotalServices] & 0xFF;
-		strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[m_TotalServices].c_str());
-		m_ServiceDataLength += m_ServiceTitles[m_TotalServices].length() + 1;
+		m_ServiceTitles[Chn] = "MAIN";
+		m_ServiceChannels[Chn] = 1;
+		m_ModulePath[Chn] = "";
+		m_ConfTable[Chn] = "";
+		m_ActionWatchdog[Chn] = 2;
+		m_LogSeverityLevel[Chn] = 4;
+		m_ServiceData[m_ServiceDataLength++] = 1; // This stores the service list, [chn][title]
+		strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
+		m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
 		m_TotalProperties++;
 
 		// Loop to query all other modules in startup table
@@ -142,12 +145,12 @@ public:
 		{
 			// query each row
 			// ID, Title, Channel, Path, Configure, Watchdog, Severity
-			m_err = sqlite3_step(m_ConfStatement[0]);
+			m_err = sqlite3_step(m_ConfStatement[1]);
 			// keep query until there is nothing left
 			if (m_err != SQLITE_ROW)
 				break;
 
-			count = sqlite3_column_count(m_ConfStatement[0]);
+			count = sqlite3_column_count(m_ConfStatement[1]);
 			if ( count < 7)
 			{
 				m_err = -5;
@@ -155,49 +158,56 @@ public:
 				return false;
 			}
 
-			// parse each row in startup table
-			m_TotalServices = sqlite3_column_int(m_ConfStatement[0], 0);  // The ID
-			m_ServiceTitles[m_TotalServices].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 1)); // The service title
-			m_ServiceChannels[m_TotalServices] = sqlite3_column_int(m_ConfStatement[0], 2);  // The channel
-			read = sqlite3_column_text(m_ConfStatement[0], 3); 
+			// parse each column in startup table
+			ID = sqlite3_column_int(m_ConfStatement[1], 0);  // The ID
+			Chn = sqlite3_column_int(m_ConfStatement[1], 2);  // The channel
+			m_ServiceTitles[Chn].assign((const char*)sqlite3_column_text(m_ConfStatement[1], 1)); // The service title
+			m_ServiceChannels[Chn] = Chn;
+			read = sqlite3_column_text(m_ConfStatement[1], 3); 
 			if (read)
-				m_ModulePath[m_TotalServices].assign((const char*)read);  // The module path
+				m_ModulePath[Chn].assign((const char*)read);  // The module path
 			else
-				m_ModulePath[m_TotalServices].clear(); // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[0], 4);
+				m_ModulePath[Chn].clear(); // in case it is null
+			read =sqlite3_column_text(m_ConfStatement[1], 4);
 			if (read)
-				m_ConfTable[m_TotalServices].assign((const char*)read);  // The config table
+				m_ConfTable[Chn].assign((const char*)read);  // The config table
 			else
-				m_ConfTable[m_TotalServices].clear();  // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[0], 5); // The watchdog reload, restart, or reboot
-			m_ActionWatchdog[m_TotalServices] = 0;
-			if (!strcmp((const char*)read, "restart"))
-				m_ActionWatchdog[m_TotalServices] = 1;
-			if (!strcmp((const char*)read, "reboot"))
-				m_ActionWatchdog[m_TotalServices] = 2;
+				m_ConfTable[Chn].clear();  // in case it is null
+			read =sqlite3_column_text(m_ConfStatement[1], 5); // The watchdog reload, restart, or reboot
+			m_ActionWatchdog[Chn] = 0;
+			if (read)
+			{
+				if (!strcmp((const char*)read, "restart"))
+					m_ActionWatchdog[Chn] = 1;
+				if (!strcmp((const char*)read, "reboot"))
+					m_ActionWatchdog[Chn] = 2;
+			}
 
-			read = sqlite3_column_text(m_ConfStatement[0], 6); //  The log severity level Info, Debug, Verbose
-			m_LogSeverityLevel[m_TotalServices] = 4;
-			if (!strcmp((const char*)read, "Debug"))
-				m_LogSeverityLevel[m_TotalServices] = 5;
-			if (!strcmp((const char*)read, "Verbose"))
-				m_LogSeverityLevel[m_TotalServices] = 6;
+			read = sqlite3_column_text(m_ConfStatement[1], 6); //  The log severity level Info, Debug, Verbose
+			m_LogSeverityLevel[Chn] = 4;
+			if (read)
+			{
+				if (!strcmp((const char*)read, "Debug"))
+					m_LogSeverityLevel[Chn] = 5;
+				if (!strcmp((const char*)read, "Verbose"))
+					m_LogSeverityLevel[Chn] = 6;
+			}
 
 			// prepare the service list
-			m_ServiceData[m_ServiceDataLength++] = m_ServiceChannels[m_TotalServices] & 0xFF;
-			strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[m_TotalServices].c_str());
-			m_ServiceDataLength += m_ServiceTitles[m_TotalServices].length() + 1;
+			m_ServiceData[m_ServiceDataLength++] = Chn & 0xFF;
+			strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
+			m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
 			
 			// prepare the query of configure table
-			int offset = m_ConfTable[m_TotalServices].find_first_of(':'); // position of :
-			ConfTable = m_ConfTable[m_TotalServices].substr(0, offset); // table title is the left of the :
-			ID = atoi(m_ConfTable[m_TotalServices].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
+			int offset = m_ConfTable[Chn].find_first_of(':'); // position of :
+			ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
+			ID = atoi(m_ConfTable[Chn].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
 			string Statement("SELECT * FROM ");
 			Statement.append(ConfTable);
 			if (ID)  // any positive number means to query only that ID
 				Statement.append(" WHERE ID=" + to_string(ID));
 			Statement.append(";");
-			m_err = sqlite3_prepare_v2(m_Confdb, Statement.c_str(), Statement.length(), &m_ConfStatement[m_TotalServices], 0);
+			m_err = sqlite3_prepare_v2(m_Confdb, Statement.c_str(), Statement.length(), &m_ConfStatement[Chn], 0);
 			if (m_err)
 			{
 				fprintf(stderr, "Failed to prepare the query of configure table %s"
@@ -210,6 +220,94 @@ public:
 		} while (true);
 
 		// 
+		return true;
+	}
+
+	bool RunService(int Channel)
+	{
+		if (Channel <=1 || Channel > 255)
+		{
+			fprintf(stderr, "Cannot start the service. The channel specified %d is invalid.\n", Channel);
+			Log("Cannot start the service. The channel specified " + to_string(Channel) + " is invalid", 2); // This is a error.
+			return false;
+		}
+
+		if (m_ModulePath[Channel].empty())
+			return false;
+
+		char *argv[] = { NULL, "Hello", "world", NULL };
+		int p;
+		bool rst{ true };
+
+		argv[0] = (char *)m_ModulePath[Channel].c_str(); // the module path
+		argv[1] = (char *)to_string(Channel).c_str();  // the channel number
+		argv[2] = (char *)m_ServiceTitles[Channel].c_str();  // the service title
+
+		pid_t pid = fork();
+		if (pid == -1)
+		{
+			fprintf(stderr, "Cannot fork.\n");
+			Log("Cannot fork when trying to start service at channel " + to_string(Channel), 2); // this is an error
+			return false;
+		}
+
+		if (pid == 0) // This is child process
+		{
+			execve(argv[0], argv, nullptr);
+			fprintf(stderr, "Cannot start %s %s %s.\n", argv[0], argv[1], argv[2]);
+			Log("Cannot start " + m_ModulePath[Channel], 2);  // log the error
+			return false;
+		}
+
+		return true;
+	}
+
+	bool KillService(long Channel)
+	{
+		if (Channel <= 1 || Channel > 255)
+		{
+			return false;
+		}
+		if (!m_Pids[Channel])  // check if onboard
+			return false;
+
+		// delete the service from active module list
+		for (int j = 0; j < m_TotalClients - 1; j++)
+			m_Clients[j] = m_Clients[j + 1];
+		m_Clients[m_TotalClients--] = 0;
+
+		fprintf(stderr, "The service module '%s' is running with stored pid=%ld. Now trying to kill it.\n",
+			m_ServiceTitles[Channel].c_str(), m_Pids[Channel]);
+
+		// try to determine if the pid is still running
+		int rst = kill(m_Pids[Channel], 0);
+		if (rst < 0)
+		{
+			fprintf(stderr, "The process of service '%s' has errno=%d. Shall kill it roughly.\n", 
+				m_ServiceTitles[Channel].c_str(), errno);
+			rst = kill(m_Pids[Channel], SIGKILL);
+		}
+		else
+		{
+			fprintf(stderr, "The process of service '%s' is running OK. Shall kill it politely.\n", 
+				m_ServiceTitles[Channel].c_str());
+			fprintf(stderr, "Parent PID=%d, child PID=%d\n", getpid(), m_Pids[Channel]);
+			rst = kill(m_Pids[Channel], SIGTERM);
+			//rst = kill(m_Pids[Channel], SIGKILL);
+		}
+		m_Pids[Channel] = 0;
+
+
+		if (rst < 0)
+		{
+			fprintf(stderr, "There is something wrong when killing service '%s' with errno=%d\n", m_ServiceTitles[Channel].c_str(), errno);
+			Log("There is something wrong when killing service " + m_ServiceTitles[Channel]);
+			return false;
+		}
+		fprintf(stderr, "%s is killed successfully.\n", m_ServiceTitles[Channel].c_str());
+		// sleep for 1s
+		sleep(1);
+
 		return true;
 	}
 
@@ -510,6 +608,7 @@ public:
 		if (type >= 32)
 			return type;
 
+		msg = m_ServiceTitles[m_MsgChn];
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
 
@@ -517,10 +616,6 @@ public:
 		switch (type)
 		{
 		case CMD_ONBOARD:
-			// local log
-			msg = GetServiceTitle(m_MsgChn);
-			Log("A new service " + msg + " gets onboard at channel " + to_string(m_MsgChn));
-
 			// update onboard list which is stored at m_Clients[]
 			for (i = 0; i < m_TotalClients; i++)
 			{ 
@@ -531,18 +626,24 @@ public:
 				m_Clients[m_TotalClients++] = m_MsgChn;
 
 			// get the module pid and save it in m_Subscriptions[], reuse the storage
-			memcpy(&pid, m_buf.mText, sizeof(pid));
-			offset = sizeof(pid);
+			keyword.assign(m_buf.mText);
+			offset = keyword.length() + 1;
+			memcpy(&pid, m_buf.mText + offset, sizeof(pid));
+			offset += sizeof(pid);
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
-			m_Pids[i] = pid;
+			m_Pids[m_MsgChn] = pid; // store the pid into array
+			Log("A new service " + keyword + " gets onboard at channel " + to_string(m_MsgChn) + " with pid=" + to_string(pid));
+			cout << keyword << " has a pid=" << pid << endl;
+			if (keyword.compare(msg))
+				Log("The new service title " + keyword + " is not identical to the predefined title " + msg);
 
 			// reply databse query first
 			ReplyDBQuery();
 			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn));
 
 			// reply the log severity level next
-			SndCmd("LogSeverityLevel=" + to_string(m_LogSeverityLevel[i]), msg);
-			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[i]) + " to " + msg);
+			SndCmd("LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]), msg);
+			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]) + " to " + msg);
 
 			// reply service list to sub-module at the end
 			ReplyServiceList();
@@ -551,7 +652,6 @@ public:
 			return type;
 
 		case CMD_DATABASEUPDATE:
-			msg = GetServiceTitle(m_MsgChn);
 			ParseDBUpdate();
 			Log("Service " + msg + " updates its database elements.");
 			return type;
@@ -561,23 +661,19 @@ public:
 			return type;
 
 		case CMD_DATABASEQUERY:
-			msg = GetServiceTitle(m_MsgChn);
 			ReplyDBQuery();
 			Log("Service " + msg + " requests database query.", 5);
 			return type;
 
 		case CMD_WATCHDOG:
-			msg = GetServiceTitle(m_MsgChn);
-			Log("Service " + msg + " feed its watchdog.", 5);
+			Log("Service " + msg + " feed its watchdog.", 6);
 			return type;
 
 		case CMD_STRING:
-			msg = GetServiceTitle(m_MsgChn);
 			Log("Service " + msg + "sends a message " + GetRcvMsg() + " to the main. ");
 			return type;
 
 		case CMD_DOWN:
-			msg = GetServiceTitle(m_MsgChn);
 			Log("Service " + msg + " reports down. Informs every sub modules.");
 
 			// broadcast the message that one channel has down
@@ -586,11 +682,11 @@ public:
 
 		// Auto parse the system configurations
 		case CMD_COMMAND:
-			msg.assign(m_buf.mText);
-			Log("Get a command: " + msg + " from " + GetServiceTitle(m_MsgChn));
-			offset = msg.find_first_of('=');  // find =
-			keyword = msg.substr(0, offset);  // keyword is left of =
-			msg = msg.substr(offset + 1); // now msg is right of =
+			keyword.assign(m_buf.mText);
+			Log("Get a command: " + keyword + " from " + msg);
+			offset = keyword.find_first_of('=');  // find =
+			msg = keyword.substr(offset + 1); // now msg is right of =
+			keyword = keyword.substr(0, offset);  // keyword is left of =
 
 			// Update the log severity level
 			if (!keyword.compare("LogSeverityLevel"))
@@ -611,7 +707,7 @@ public:
 			}
 
 			// the flag update of auto service data update
-			if (!keyword.compare("AutoUpdate"))
+			if (!keyword.compare("AutoPublish"))
 			{
 				if (!msg.compare("on"))
 					m_AutoPublish = true;
@@ -641,7 +737,6 @@ public:
 			return type; // return when get a command. No more auto parse
 
 		case CMD_STATUS:
-			msg = GetServiceTitle(m_MsgChn);
 			Log("Service '" + msg + "' reports its status");
 
 			TotalMsgReceived = 0;
@@ -707,7 +802,7 @@ public:
 			return type;
 
 		default:
-			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len));
+			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len) + " from " + msg);
 		}
 		return type;
 	}
@@ -823,6 +918,13 @@ public:
 		snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
 		return buf;
 	}
+
+	string GetServiceTitle(long Chn)
+	{
+		if (Chn < 1 || Chn > 255)
+			return "";
+		return m_ServiceTitles[Chn];
+	}
 };
 
 
@@ -848,7 +950,11 @@ int main(int argc, char *argv[])
 
 	launcher->SndCmd("LogSeverityLevel=Debug", "MAIN");
 	launcher->SndCmd("AutoWatchdog=off", "MAIN");
-	launcher->SndCmd("AutoUpdate=on", "MAIN");
+	launcher->SndCmd("AutoPublish=off", "MAIN");
+
+	for (int i = 2; i < 256; i++)
+		if (launcher->RunService(i))
+			cout << "MAIN: Launch a new service on channel " << i << endl;
 
 	// Simulate the main module/head working
 	while (1)
@@ -857,8 +963,11 @@ int main(int argc, char *argv[])
 		size_t chn = launcher->CheckWatchdog();
 		if (chn)
 		{
-			cout << "Watchdog warning. '" << launcher->GetServiceTitle(chn) 
+			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
+			launcher->KillService(chn);
+			if (launcher->RunService(chn))
+				cout << "MAIN restarts service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
 			continue;
 		}
 
@@ -870,7 +979,7 @@ int main(int argc, char *argv[])
 		if (type == CMD_COMMAND)
 		{
 			msg = launcher->GetRcvMsg();
-			cout << "Get a command " << msg << " from " << launcher->GetServiceTitle(launcher->m_MsgChn) << endl;
+			cout << "MAIN gets a command " << msg << " from " << launcher->GetServiceTitle(launcher->m_MsgChn) << endl;
 		}
 	}
 }
