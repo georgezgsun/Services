@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
-	int count = myChannel;
+	int count = myChannel * 10;
 
 	string msg;
 	while (true)
@@ -125,12 +125,14 @@ int main(int argc, char *argv[])
 		if (tester->WatchdogFeed())
 		{
 			count--;
-			cout << datetime << " : " << myTitle << " counts down " << count << endl;
+			//cout << datetime << " : " << myTitle << " counts down " << count << endl;
 
 			if (count <= 0)
 			{
 				//count = 5;
 				//break;
+				cout << datetime << " : " << myTitle << " counts down to " << count << endl;
+				cout << "My pid=" << getpid() << ", ppid=" << getppid() << "." << endl;
 				sleep(10);
 				cout << myTitle << " is still running." << endl;
 				break;

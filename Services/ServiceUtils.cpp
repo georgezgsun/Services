@@ -174,7 +174,7 @@ bool ServiceUtils::StartService()
 	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 4);
 	m_AutoSleep = true;  // enable service data auto update after startup
 	m_AutoWatchdog = true; // enable watchdog auto feed after startup
-	m_AutoPublish = true;  // enable service data auto feed after startup
+	m_AutoPublish = false;  // enable service data auto feed after startup
 		
 	// Broadcast my onboard messages to all service channels other than the main module and myself
 	for (size_t i = 1; i < m_TotalServices; i++)
@@ -646,7 +646,8 @@ size_t ServiceUtils::ChkNewMsg()
 				if (j >= m_TotalDatabaseElements)
 					m_IndexdbElements[m_TotalDatabaseElements++] = i;
 			} while (offset < 255);
-			break; // continue to read next message
+			//break; // continue to read next message
+			return type;  // return, no more auto parse; for list transfer
 
 		// auto process the message that a service is down.
 		case CMD_DOWN:

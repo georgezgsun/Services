@@ -50,11 +50,6 @@ public:
 		sqlite3_close(m_Logdb);
 	}
 
-	// used to store the index of database elements for each sub module 
-	size_t SubIndex[32][127];
-
-	size_t m_TotalDBElements[127];
-
 	sqlite3 *m_Logdb;
 	sqlite3 *m_Confdb;
 	sqlite3_stmt *m_log;
@@ -361,16 +356,9 @@ public:
 		m_buf.len = 0; // temporal assigned to 0
 		m_buf.type = CMD_DATABASEQUERY;
 
-		size_t i;
+		size_t i = m_MsgChn;
 		string tmp;
 		
-		// find the index of the sevice channel
-		for (i = 0; i < m_TotalServices; i++)
-			if (m_ServiceChannels[i] == m_MsgChn)
-				break;
-		if (i >= m_TotalServices)
-			return false;  // no such a service channel in the list
-
 		// query multiple rows in case need to transfer the whole table
 		int ID{ 0 };
 		const unsigned char *read;
@@ -965,6 +953,11 @@ int main(int argc, char *argv[])
 		{
 			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
+			
+			// Debug only, not apply watchdog for GUI
+			if (chn == 21)
+				continue;
+
 			launcher->KillService(chn);
 			if (launcher->RunService(chn))
 				cout << "MAIN restarts service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
