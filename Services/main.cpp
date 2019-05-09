@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <sys/reboot.h>
 #include <string.h>
 #include <sqlite3.h>
 #include <pthread.h>
@@ -54,7 +55,7 @@ public:
 	sqlite3 *m_Confdb;
 	sqlite3_stmt *m_log;
 	char m_ActionWatchdog[255];
-	long m_Pids[255];
+	pid_t m_Pids[255];
 	char m_LogSeverityLevel[255];
 	string m_ModulePath[255];
 	string m_ConfTable[255];
@@ -99,7 +100,7 @@ public:
 
 		// query the startup table in configure database
 		sql = "SELECT * FROM STARTUP;";
-		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[1], 0); // the main module config query statement
+		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[0], 0); // the main module config query statement
 		if (m_err)
 		{
 			fprintf(stderr, "Failed to prepare the query of startup table with error:%s.\n", sqlite3_errmsg(m_Confdb));
@@ -124,28 +125,28 @@ public:
 		int Chn = 1;
 		m_TotalProperties = 0;
 		m_ServiceDataLength = 0;
-		m_ServiceTitles[Chn] = "MAIN";
-		m_ServiceChannels[Chn] = 1;
-		m_ModulePath[Chn] = "";
-		m_ConfTable[Chn] = "";
-		m_ActionWatchdog[Chn] = 2;
-		m_LogSeverityLevel[Chn] = 4;
-		m_ServiceData[m_ServiceDataLength++] = 1; // This stores the service list, [chn][title]
-		strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
-		m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
-		m_TotalProperties++;
+		//m_ServiceTitles[Chn] = "MAIN";
+		//m_ServiceChannels[Chn] = 1;
+		//m_ModulePath[Chn] = "";
+		//m_ConfTable[Chn] = "";
+		//m_ActionWatchdog[Chn] = 2;
+		//m_LogSeverityLevel[Chn] = 4;
+		//m_ServiceData[m_ServiceDataLength++] = 1; // This stores the service list, [chn][title]
+		//strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
+		//m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
+		//m_TotalProperties++;
 
 		// Loop to query all other modules in startup table
 		do
 		{
 			// query each row
 			// ID, Title, Channel, Path, Configure, Watchdog, Severity
-			m_err = sqlite3_step(m_ConfStatement[1]);
+			m_err = sqlite3_step(m_ConfStatement[0]);
 			// keep query until there is nothing left
 			if (m_err != SQLITE_ROW)
 				break;
 
-			count = sqlite3_column_count(m_ConfStatement[1]);
+			count = sqlite3_column_count(m_ConfStatement[0]);
 			if ( count < 7)
 			{
 				m_err = -5;
@@ -154,31 +155,33 @@ public:
 			}
 
 			// parse each column in startup table
-			ID = sqlite3_column_int(m_ConfStatement[1], 0);  // The ID
-			Chn = sqlite3_column_int(m_ConfStatement[1], 2);  // The channel
-			m_ServiceTitles[Chn].assign((const char*)sqlite3_column_text(m_ConfStatement[1], 1)); // The service title
+			ID = sqlite3_column_int(m_ConfStatement[0], 0);  // The ID
+			Chn = sqlite3_column_int(m_ConfStatement[0], 2);  // The channel
+			m_ServiceTitles[Chn].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 1)); // The service title
 			m_ServiceChannels[Chn] = Chn;
-			read = sqlite3_column_text(m_ConfStatement[1], 3); 
+			read = sqlite3_column_text(m_ConfStatement[0], 3); 
 			if (read)
 				m_ModulePath[Chn].assign((const char*)read);  // The module path
 			else
 				m_ModulePath[Chn].clear(); // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[1], 4);
+			read =sqlite3_column_text(m_ConfStatement[0], 4);
 			if (read)
 				m_ConfTable[Chn].assign((const char*)read);  // The config table
 			else
 				m_ConfTable[Chn].clear();  // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[1], 5); // The watchdog reload, restart, or reboot
+			read =sqlite3_column_text(m_ConfStatement[0], 5); // The watchdog reload, restart, or reboot
 			m_ActionWatchdog[Chn] = 0;
 			if (read)
 			{
-				if (!strcmp((const char*)read, "restart"))
+				if (!strcmp((const char*)read, "reload"))
 					m_ActionWatchdog[Chn] = 1;
-				if (!strcmp((const char*)read, "reboot"))
+				else if (!strcmp((const char*)read, "restart"))
 					m_ActionWatchdog[Chn] = 2;
+				else if (!strcmp((const char*)read, "reboot"))
+					m_ActionWatchdog[Chn] = 3;
 			}
 
-			read = sqlite3_column_text(m_ConfStatement[1], 6); //  The log severity level Info, Debug, Verbose
+			read = sqlite3_column_text(m_ConfStatement[0], 6); //  The log severity level Info, Debug, Verbose
 			m_LogSeverityLevel[Chn] = 4;
 			if (read)
 			{
@@ -227,16 +230,42 @@ public:
 			return false;
 		}
 
+		// Not run the service module in case there is no path assigned
 		if (m_ModulePath[Channel].empty())
 			return false;
 
-		char *argv[] = { NULL, "Hello", "world", NULL };
+		// Not run the service in case it is not reload
+		switch (m_ActionWatchdog[Channel])
+		{
+		case 1:  //reload
+			break;
+
+		case 2: //restart
+			if (!m_ModulePath[1].empty())
+				execl(m_ModulePath[1].c_str(), m_ModulePath[1].c_str()); // restart the main module
+			fprintf(stderr, "Cannot restart the main module.\n");
+			Log("Cannot restart the main module.", 1);
+			sleep(1);
+
+		case 3:  // reboot
+			Log("Reboot the whole system.");
+			sleep(1);
+			sync();
+			reboot(RB_AUTOBOOT);
+			exit(0);
+			break;
+
+		default:
+			return false;
+		}
+
 		int p;
 		bool rst{ true };
 
-		argv[0] = (char *)m_ModulePath[Channel].c_str(); // the module path
-		argv[1] = (char *)to_string(Channel).c_str();  // the channel number
-		argv[2] = (char *)m_ServiceTitles[Channel].c_str();  // the service title
+		//char *argv[] = { NULL, "Hello", "world", NULL };
+		//argv[0] = (char *)m_ModulePath[Channel].c_str(); // the module path
+		//argv[1] = (char *)to_string(Channel).c_str();  // the channel number
+		//argv[2] = (char *)m_ServiceTitles[Channel].c_str();  // the service title
 
 		pid_t pid = fork();
 		if (pid == -1)
@@ -248,12 +277,14 @@ public:
 
 		if (pid == 0) // This is child process
 		{
-			execve(argv[0], argv, nullptr);
-			fprintf(stderr, "Cannot start %s %s %s.\n", argv[0], argv[1], argv[2]);
+			//execve(argv[0], argv, nullptr);
+			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), to_string(Channel).c_str(), m_ServiceTitles[Channel].c_str());
+			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), Channel, m_ServiceTitles[Channel].c_str());
 			Log("Cannot start " + m_ModulePath[Channel], 2);  // log the error
 			return false;
 		}
 
+		// This is the parent process
 		return true;
 	}
 
@@ -267,12 +298,26 @@ public:
 			return false;
 
 		// delete the service from active module list
-		for (int j = 0; j < m_TotalClients - 1; j++)
-			m_Clients[j] = m_Clients[j + 1];
-		m_Clients[m_TotalClients--] = 0;
-
-		fprintf(stderr, "The service module '%s' is running with stored pid=%ld. Now trying to kill it.\n",
-			m_ServiceTitles[Channel].c_str(), m_Pids[Channel]);
+		int i;
+		for (i = 0; i < m_TotalClients; i++)
+		{
+			if (Channel == m_Clients[i])
+			{
+				for (int j = i; j < m_TotalClients - 1; j++)
+					m_Clients[j] = m_Clients[j + 1];
+				m_Clients[m_TotalClients] = 0;
+				break;
+			}
+		}
+		if (i >= m_TotalClients)
+		{
+			fprintf(stderr, "Cannot find channel %ld in current running services list.\n", Channel);
+			for (int j = 0; j < m_TotalClients; j++)
+				fprintf(stderr, "Position %d: %d\n", j, m_Clients[j]);
+			Log("Cannot find channel " + to_string(Channel) + " in current running services list.\n", 5); // This is an error.
+			//return true;
+		}
+		m_TotalClients--;  // reduce the number of active modules here
 
 		// try to determine if the pid is still running
 		int rst = kill(m_Pids[Channel], 0);
@@ -283,13 +328,7 @@ public:
 			rst = kill(m_Pids[Channel], SIGKILL);
 		}
 		else
-		{
-			fprintf(stderr, "The process of service '%s' is running OK. Shall kill it politely.\n", 
-				m_ServiceTitles[Channel].c_str());
-			fprintf(stderr, "Parent PID=%d, child PID=%d\n", getpid(), m_Pids[Channel]);
 			rst = kill(m_Pids[Channel], SIGTERM);
-			//rst = kill(m_Pids[Channel], SIGKILL);
-		}
 		m_Pids[Channel] = 0;
 
 
@@ -300,6 +339,8 @@ public:
 			return false;
 		}
 		fprintf(stderr, "%s is killed successfully.\n", m_ServiceTitles[Channel].c_str());
+		Log("The service " + m_ServiceTitles[Channel] + " is killed."); // This is an Info
+
 		// sleep for 1s
 		sleep(1);
 
@@ -621,7 +662,7 @@ public:
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
 			m_Pids[m_MsgChn] = pid; // store the pid into array
 			Log("A new service " + keyword + " gets onboard at channel " + to_string(m_MsgChn) + " with pid=" + to_string(pid));
-			cout << keyword << " has a pid=" << pid << endl;
+			//cout << keyword << " has a pid=" << pid << endl;
 			if (keyword.compare(msg))
 				Log("The new service title " + keyword + " is not identical to the predefined title " + msg);
 

@@ -493,14 +493,7 @@ size_t ServiceUtils::ChkNewMsg()
 
 		// no autoreply for main module
 		if (m_Chn == 1)
-		{
-			m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; // set the watchdog timer for that channel
-			if (type == CMD_ONBOARD)
-				m_Clients[m_TotalClients++] = m_MsgChn;
-
-			if (type != CMD_COMMAND) // auto parse the CMD_COMMAND for main
-				return m_buf.type;  
-		}
+			return type;
 
 		// no auto reply for those normal receiving. type < 31 commands; 32 is string. 33 is integer. anything larger are user defined types
 		if (type >= 32)

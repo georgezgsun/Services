@@ -131,10 +131,10 @@ int main(int argc, char *argv[])
 			{
 				//count = 5;
 				//break;
-				cout << datetime << " : " << myTitle << " counts down to " << count << endl;
-				cout << "My pid=" << getpid() << ", ppid=" << getppid() << "." << endl;
+				cout << datetime << " : " << myTitle << " counts down to " << count 
+					<< " with pid=" << getpid() << ", ppid=" << getppid() << "." << endl;
 				sleep(10);
-				cout << myTitle << " is still running." << endl;
+				cout << myTitle << " is still running with pid=" << getpid() << endl;
 				break;
 			}
 		}
