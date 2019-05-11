@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
 	struct timeval tv;
 	struct tm *nowtm;
 	char tmbuf[64], datetime[64];
-	int count = myChannel * 10;
+	int count = myChannel + 10;
 
 	string msg;
 	while (true)
@@ -133,8 +133,9 @@ int main(int argc, char *argv[])
 				//break;
 				cout << datetime << " : " << myTitle << " counts down to " << count 
 					<< " with pid=" << getpid() << ", ppid=" << getppid() << "." << endl;
-				sleep(10);
+				sleep(10);  // this will stroke the watchdog action
 				cout << myTitle << " is still running with pid=" << getpid() << endl;
+				tester->Log(myTitle + " is still running. No watchdog action.", 1);
 				break;
 			}
 		}

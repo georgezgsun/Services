@@ -933,25 +933,39 @@ bool ServiceUtils::Log(string logContent, char Severity)
 		return false;
 
 	struct timeval tv;
-	gettimeofday(&tv, nullptr);
 	m_buf.rChn = 1; // log is always sent to main module
 	m_buf.sChn = m_Chn;
-	m_buf.sec = tv.tv_sec;
-	m_buf.usec = tv.tv_usec;
-	m_buf.len = logContent.length() + sizeof(Severity) + 1;
 	m_buf.type = CMD_LOG;
 
-	memcpy(m_buf.mText, &Severity, sizeof(Severity));
-	memcpy(m_buf.mText + sizeof(Severity), logContent.c_str(), logContent.length() + 1);
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+	// breakdown the log into short logs in case it is very long
+	size_t len;
+	while (len = logContent.length())
 	{
-		m_err = errno;
-		printf("Cannot send message in log with error %d.\n", m_err);
-		return false;
+		gettimeofday(&tv, nullptr);
+		m_buf.sec = tv.tv_sec;  //update the timestamp
+		m_buf.usec = tv.tv_usec;
+
+		if (len > 200)
+			len = 200;
+		memcpy(m_buf.mText, &Severity, sizeof(Severity));
+		memcpy(m_buf.mText + sizeof(Severity), logContent.c_str(), len);
+		m_buf.mText[len + sizeof(Severity)] = 0; // add a /0 in the end anyway
+		m_buf.len = len + sizeof(Severity) + 1;
+
+		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+		{
+			m_err = errno;
+			printf("Cannot send message in log with error %d.\n", m_err);
+			return false;
+		}
+
+		m_err = 0;
+		m_TotalMessageSent++;
+		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+
+		// shorten the logContent
+		logContent = logContent.substr(len);
 	}
-	m_err = 0;
-	m_TotalMessageSent++;
-	m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed 
 	return true;
 };
 

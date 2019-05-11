@@ -17,7 +17,7 @@ using namespace std;
 
 struct thread_data
 {
-	sqlite3 * logDB;
+	sqlite3 * logPath;
 	string * sql;
 };
 
@@ -26,7 +26,7 @@ void *LogInDB(void * threadArg)
 	struct thread_data *my_data;
 	my_data = static_cast<struct thread_data *>(threadArg);
 	char *zErrMsg = 0;
-	if (sqlite3_exec(my_data->logDB, my_data->sql->c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
+	if (sqlite3_exec(my_data->logPath, my_data->sql->c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
 	{
 		fprintf(stderr, "Cannot insert new log from MAIN into AppLog table with error: %s\n", zErrMsg);
 		sqlite3_free(zErrMsg);
@@ -62,8 +62,14 @@ public:
 	sqlite3_stmt *m_ConfStatement[255];
 
 	// Main module startup
-	bool StartService()
+	bool StartService(int argc, char *argv[])
 	{
+		string path(argv[0]);
+		int pos = path.find_last_of('/') + 1;  // include / at the end
+		path = path.substr(0, pos);
+		string logPath = path + "logs.db";
+		string configPath = path + "Roswell.db";
+
 		if (m_ID < 0 || m_Chn != 1)
 		{
 			m_err = -1;
@@ -71,22 +77,28 @@ public:
 			return false;
 		}
 
+		if (argc > 1)
+			configPath = path.append(argv[1]);
+		if (argc > 2)
+			logPath = path.append(argv[2]);
+
 		// connect the logs database
-		int rst = sqlite3_open("/home/georges/projects/Services/logs.db", &m_Logdb);
+		int rst = sqlite3_open(logPath.c_str(), &m_Logdb);
 		if (rst)
 		{
 			m_err = -2;
-			fprintf(stderr, "Failed to open the log database at /home/georges/projects/Services/logs.db with error: %s\n", sqlite3_errmsg(m_Logdb));
+			fprintf(stderr, "Failed to open the log database at %s with error: %s\n", 
+				logPath.c_str(), sqlite3_errmsg(m_Logdb));
 			return false;
 		}
 
 		// connect the configure database
-		rst = sqlite3_open("/home/georges/projects/Services/Roswell.db", &m_Confdb);
+		rst = sqlite3_open(configPath.c_str(), &m_Confdb);
 		if (rst)
 		{
 			m_err = -3;
-			fprintf(stderr, "Failed to open the Roswell configure database at "
-				"/home/georges/projects/Services/Roswell.db with error: %s\n", sqlite3_errmsg(m_Confdb));
+			fprintf(stderr, "Failed to open the Roswell configure database at %s with error: %s\n",
+				configPath.c_str(), sqlite3_errmsg(m_Confdb));
 			return false;
 		}
 
@@ -125,16 +137,6 @@ public:
 		int Chn = 1;
 		m_TotalProperties = 0;
 		m_ServiceDataLength = 0;
-		//m_ServiceTitles[Chn] = "MAIN";
-		//m_ServiceChannels[Chn] = 1;
-		//m_ModulePath[Chn] = "";
-		//m_ConfTable[Chn] = "";
-		//m_ActionWatchdog[Chn] = 2;
-		//m_LogSeverityLevel[Chn] = 4;
-		//m_ServiceData[m_ServiceDataLength++] = 1; // This stores the service list, [chn][title]
-		//strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
-		//m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
-		//m_TotalProperties++;
 
 		// Loop to query all other modules in startup table
 		do
@@ -234,6 +236,38 @@ public:
 		if (m_ModulePath[Channel].empty())
 			return false;
 
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+		m_WatchdogTimer[Channel] = tv.tv_sec;
+
+		int p;
+		bool rst{ true };
+
+		pid_t pid = fork();
+		if (pid == -1)
+		{
+			fprintf(stderr, "Cannot fork.\n");
+			Log("Cannot fork when trying to start service at channel " + to_string(Channel), 2); // this is an error
+			return false;
+		}
+
+		if (pid == 0) // This is child process
+		{
+			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), to_string(Channel).c_str(), m_ServiceTitles[Channel].c_str());
+			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), Channel, m_ServiceTitles[Channel].c_str());
+			Log("Cannot start " + m_ModulePath[Channel], 2);  // log the error
+			return false;
+		}
+
+		// This is the parent process
+		return true;
+	}
+
+	bool KillService(long Channel)
+	{
+		if (Channel <= 1 || Channel > 255)
+			return false;
+
 		// Not run the service in case it is not reload
 		switch (m_ActionWatchdog[Channel])
 		{
@@ -259,41 +293,6 @@ public:
 			return false;
 		}
 
-		int p;
-		bool rst{ true };
-
-		//char *argv[] = { NULL, "Hello", "world", NULL };
-		//argv[0] = (char *)m_ModulePath[Channel].c_str(); // the module path
-		//argv[1] = (char *)to_string(Channel).c_str();  // the channel number
-		//argv[2] = (char *)m_ServiceTitles[Channel].c_str();  // the service title
-
-		pid_t pid = fork();
-		if (pid == -1)
-		{
-			fprintf(stderr, "Cannot fork.\n");
-			Log("Cannot fork when trying to start service at channel " + to_string(Channel), 2); // this is an error
-			return false;
-		}
-
-		if (pid == 0) // This is child process
-		{
-			//execve(argv[0], argv, nullptr);
-			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), to_string(Channel).c_str(), m_ServiceTitles[Channel].c_str());
-			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), Channel, m_ServiceTitles[Channel].c_str());
-			Log("Cannot start " + m_ModulePath[Channel], 2);  // log the error
-			return false;
-		}
-
-		// This is the parent process
-		return true;
-	}
-
-	bool KillService(long Channel)
-	{
-		if (Channel <= 1 || Channel > 255)
-		{
-			return false;
-		}
 		if (!m_Pids[Channel])  // check if onboard
 			return false;
 
@@ -305,7 +304,7 @@ public:
 			{
 				for (int j = i; j < m_TotalClients - 1; j++)
 					m_Clients[j] = m_Clients[j + 1];
-				m_Clients[m_TotalClients] = 0;
+				m_Clients[m_TotalClients - 1] = 0;
 				break;
 			}
 		}
@@ -338,11 +337,34 @@ public:
 			Log("There is something wrong when killing service " + m_ServiceTitles[Channel]);
 			return false;
 		}
-		fprintf(stderr, "%s is killed successfully.\n", m_ServiceTitles[Channel].c_str());
-		Log("The service " + m_ServiceTitles[Channel] + " is killed."); // This is an Info
 
-		// sleep for 1s
-		sleep(1);
+		// to inform every running service module that this service has down
+		m_buf.sChn = Channel;
+		m_buf.len = 0;
+		m_buf.type = CMD_DOWN;
+		for (i=0; i < m_TotalClients; i ++)
+			ReSendMsgTo(m_Clients[i]);
+
+		// Clean all the messages sent to the killed service
+		int count = 0;
+		for (i = 2; i < 255; i++)
+		{
+			if (!m_LogSeverityLevel[i])
+			{
+				while (msgrcv(m_ID, &m_buf, sizeof(m_buf), i, IPC_NOWAIT) > 0)
+				{
+					count++;
+					m_TotalMessageReceived++;
+				}
+				if (count)
+					fprintf(stderr, "Channel %d has %d staled messages.\n", i, count);
+			}
+		}
+		fprintf(stderr, "%s is killed successfully. Read off %d staled messages.\n", m_ServiceTitles[Channel].c_str(), count);
+		Log("The service " + m_ServiceTitles[Channel] + " is killed. Read off " + to_string(count) + " staled messages."); // This is an Info
+
+		//// sleep for 1s
+		//sleep(1);
 
 		return true;
 	}
@@ -378,8 +400,8 @@ public:
 		m_buf.type = CMD_DOWN;
 
 		// broadcast to every sub modules, not main
-		for (size_t i = 1; i < m_TotalServices; i++)
-			ReSendMsgTo(m_ServiceChannels[i]);
+		for (size_t i = 1; i < m_TotalClients; i++)
+			ReSendMsgTo(m_Clients[i]);
 
 		return true;
 	}
@@ -706,7 +728,14 @@ public:
 			Log("Service " + msg + " reports down. Informs every sub modules.");
 
 			// broadcast the message that one channel has down
-			InformDown();
+			//InformDown();
+			// to inform every running service module that this service has down
+			m_buf.sChn = m_MsgChn;
+			m_buf.len = 0;
+			m_buf.type = CMD_DOWN;
+			for (i = 0; i < m_TotalClients; i++)
+				ReSendMsgTo(m_Clients[i]);
+
 			return type;
 
 		// Auto parse the system configurations
@@ -885,7 +914,7 @@ public:
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
-		threadata->logDB = m_Logdb;
+		threadata->logPath = m_Logdb;
 		threadata->sql = new string(sql);
 
 		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
@@ -925,7 +954,7 @@ public:
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
-		threadata->logDB = m_Logdb;
+		threadata->logPath = m_Logdb;
 		threadata->sql = new string(sql);
 
 		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
@@ -970,7 +999,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	if (!launcher->StartService())
+	if (!launcher->StartService(argc, argv))
 	{
 		cerr << endl << "Cannot launch the headquater." << endl;
 		return -1;
@@ -994,10 +1023,6 @@ int main(int argc, char *argv[])
 		{
 			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn) 
 				<< "' stops responding on channel " << chn << endl;
-			
-			// Debug only, not apply watchdog for GUI
-			if (chn == 21)
-				continue;
 
 			launcher->KillService(chn);
 			if (launcher->RunService(chn))
