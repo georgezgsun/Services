@@ -56,7 +56,7 @@ public:
 	sqlite3_stmt *m_log;
 	char m_ActionWatchdog[255];
 	pid_t m_Pids[255];
-	char m_LogSeverityLevel[255];
+	int m_LogSeverityLevel[255];
 	string m_ModulePath[255];
 	string m_ConfTable[255];
 	sqlite3_stmt *m_ConfStatement[255];
@@ -105,7 +105,8 @@ public:
 		m_err = 0;
 
 		// prepare statement of log insert
-		string sql = "INSERT INTO AppLog VALUES ( ?, ?, ?, ?, ?, ?, ?, ? );";
+		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
+		string sql = "INSERT INTO AppLog VALUES ( null, ?, ?, ?, ?, ? );";
 		m_err = sqlite3_prepare_v2(m_Logdb, sql.c_str(), -1, &m_log, 0);
 		if (m_err)
 			fprintf(stderr, "Failed to execute statement %s with error: %s\n", sql, sqlite3_errmsg(m_Logdb));
@@ -137,6 +138,7 @@ public:
 		int Chn = 1;
 		m_TotalProperties = 0;
 		m_ServiceDataLength = 0;
+		m_Pids[1] = getpid();
 
 		// Loop to query all other modules in startup table
 		do
@@ -184,13 +186,13 @@ public:
 			}
 
 			read = sqlite3_column_text(m_ConfStatement[0], 6); //  The log severity level Info, Debug, Verbose
-			m_LogSeverityLevel[Chn] = 4;
+			m_LogSeverityLevel[Chn] = 2000;
 			if (read)
 			{
 				if (!strcmp((const char*)read, "Debug"))
-					m_LogSeverityLevel[Chn] = 5;
-				if (!strcmp((const char*)read, "Verbose"))
-					m_LogSeverityLevel[Chn] = 6;
+					m_LogSeverityLevel[Chn] = 3000;
+				else if (!strcmp((const char*)read, "Verbose"))
+					m_LogSeverityLevel[Chn] = 4000;
 			}
 
 			// prepare the service list
@@ -228,7 +230,7 @@ public:
 		if (Channel <=1 || Channel > 255)
 		{
 			fprintf(stderr, "Cannot start the service. The channel specified %d is invalid.\n", Channel);
-			Log("Cannot start the service. The channel specified " + to_string(Channel) + " is invalid", 2); // This is a error.
+			Log("Cannot start the service. The channel specified " + to_string(Channel) + " is invalid", 120); // Error code 120.
 			return false;
 		}
 
@@ -247,7 +249,7 @@ public:
 		if (pid == -1)
 		{
 			fprintf(stderr, "Cannot fork.\n");
-			Log("Cannot fork when trying to start service at channel " + to_string(Channel), 2); // this is an error
+			Log("Cannot fork when trying to start service at channel " + to_string(Channel), 12); // this is a critical error 12
 			return false;
 		}
 
@@ -255,7 +257,7 @@ public:
 		{
 			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), to_string(Channel).c_str(), m_ServiceTitles[Channel].c_str());
 			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), Channel, m_ServiceTitles[Channel].c_str());
-			Log("Cannot start " + m_ModulePath[Channel], 2);  // log the error
+			Log("Cannot start " + m_ModulePath[Channel], 13);  // log the critical error with code 13
 			return false;
 		}
 
@@ -278,11 +280,11 @@ public:
 			if (!m_ModulePath[1].empty())
 				execl(m_ModulePath[1].c_str(), m_ModulePath[1].c_str()); // restart the main module
 			fprintf(stderr, "Cannot restart the main module.\n");
-			Log("Cannot restart the main module.", 1);
+			Log("Cannot restart the main module.", 11); // critical error code 11
 			sleep(1);
 
 		case 3:  // reboot
-			Log("Reboot the whole system.");
+			Log("Reboot the whole system.", 1002);
 			sleep(1);
 			sync();
 			reboot(RB_AUTOBOOT);
@@ -313,7 +315,7 @@ public:
 			fprintf(stderr, "Cannot find channel %ld in current running services list.\n", Channel);
 			for (int j = 0; j < m_TotalClients; j++)
 				fprintf(stderr, "Position %d: %d\n", j, m_Clients[j]);
-			Log("Cannot find channel " + to_string(Channel) + " in current running services list.\n", 5); // This is an error.
+			Log("Cannot find channel " + to_string(Channel) + " in current running services list.\n", 150); // an error with code 150.
 			//return true;
 		}
 		m_TotalClients--;  // reduce the number of active modules here
@@ -334,23 +336,29 @@ public:
 		if (rst < 0)
 		{
 			fprintf(stderr, "There is something wrong when killing service '%s' with errno=%d\n", m_ServiceTitles[Channel].c_str(), errno);
-			Log("There is something wrong when killing service " + m_ServiceTitles[Channel]);
+			Log("There is something wrong when killing service " + m_ServiceTitles[Channel], 200);  // an error with code 200
 			return false;
 		}
 
 		// to inform every running service module that this service has down
+		char buf[255];  //temporal buffer to store those onboard channels
+		memset(buf, 0, sizeof(buf));  // clear the buffer
 		m_buf.sChn = Channel;
 		m_buf.len = 0;
 		m_buf.type = CMD_DOWN;
-		for (i=0; i < m_TotalClients; i ++)
+		for (i = 0; i < m_TotalClients; i++)
+		{
 			ReSendMsgTo(m_Clients[i]);
+			buf[m_Clients[i]] = 1;  // set that channel active
+		}
 
-		// Clean all the messages sent to the killed service
-		int count = 0;
+		// Clean all the messages sent to those not onboard service
+		int count;
 		for (i = 2; i < 255; i++)
 		{
-			if (!m_LogSeverityLevel[i])
+			if (!buf[i])
 			{
+				count = 0;
 				while (msgrcv(m_ID, &m_buf, sizeof(m_buf), i, IPC_NOWAIT) > 0)
 				{
 					count++;
@@ -360,11 +368,8 @@ public:
 					fprintf(stderr, "Channel %d has %d staled messages.\n", i, count);
 			}
 		}
-		fprintf(stderr, "%s is killed successfully. Read off %d staled messages.\n", m_ServiceTitles[Channel].c_str(), count);
+		//fprintf(stderr, "%s is killed successfully. Read off %d staled messages.\n", m_ServiceTitles[Channel].c_str(), count);
 		Log("The service " + m_ServiceTitles[Channel] + " is killed. Read off " + to_string(count) + " staled messages."); // This is an Info
-
-		//// sleep for 1s
-		//sleep(1);
 
 		return true;
 	}
@@ -502,7 +507,7 @@ public:
 			if (offset > 255)
 			{
 				m_err = -7;
-				Log("Critical error when query the configuration table of " + GetServiceTitle(m_MsgChn) + ". Total bytes %d grows too many.\n", 1);
+				Log("Critical error when query the configuration table of " + GetServiceTitle(m_MsgChn) + ". Total bytes %d grows too many.\n", 1); // critical error with code 1
 				return false;
 			}
 
@@ -567,7 +572,7 @@ public:
 						m_err = -121;
 						// This is a error 
 						Log(keyword + " from channel " + to_string(m_MsgChn) + " has length of "
-							+ to_string(n) + ", local's is of " + to_string(m_pptr[i]->len), 2);
+							+ to_string(n) + ", local's is of " + to_string(m_pptr[i]->len), 110); // an error with code 110
 						continue;  // continue to parse next one
 					}
 
@@ -591,7 +596,7 @@ public:
 			{
 				m_err = -120;
 				// This is a warning
-				Log(m_pptr[i]->keyword + " from channel " + to_string(m_MsgChn) + " does not match any local variables.", 3);
+				Log(m_pptr[i]->keyword + " from channel " + to_string(m_MsgChn) + " does not match any local variables.", 600); // a warning with code 600
 			}
 		} while (offset < 255);
 
@@ -615,7 +620,7 @@ public:
 				m_WatchdogTimer[index] = 0;
 				m_MsgTS_sec = tv.tv_sec;
 				m_MsgTS_usec = tv.tv_usec;
-				Log("Watchdog aleart. " + GetServiceTitle(index) + " stops responding on channel " + to_string(index));
+				Log("Watchdog aleart. " + GetServiceTitle(index) + " stops responding on channel " + to_string(index), 520); // a warning with code 520
 				return index;
 			}
 		}
@@ -686,19 +691,19 @@ public:
 			Log("A new service " + keyword + " gets onboard at channel " + to_string(m_MsgChn) + " with pid=" + to_string(pid));
 			//cout << keyword << " has a pid=" << pid << endl;
 			if (keyword.compare(msg))
-				Log("The new service title " + keyword + " is not identical to the predefined title " + msg);
+				Log("The new service title " + keyword + " is not identical to the predefined title " + msg, 140); // an error with code 140
 
 			// reply databse query first
 			ReplyDBQuery();
-			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn));
+			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn), 2100); // a debug with code 2100
 
 			// reply the log severity level next
 			SndCmd("LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]), msg);
-			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]) + " to " + msg);
+			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]) + " to " + msg, 2100); // a debug log with code 2100
 
 			// reply service list to sub-module at the end
 			ReplyServiceList();
-			Log("Replies the service list to channel " + to_string(m_MsgChn));
+			Log("Replies the service list to channel " + to_string(m_MsgChn), 2100); // a debug log with code 2100
 
 			return type;
 
@@ -713,15 +718,15 @@ public:
 
 		case CMD_DATABASEQUERY:
 			ReplyDBQuery();
-			Log("Service " + msg + " requests database query.", 5);
+			Log("Service " + msg + " requests database query.", 2105); // a debug log
 			return type;
 
 		case CMD_WATCHDOG:
-			Log("Service " + msg + " feed its watchdog.", 6);
+			Log("Service " + msg + " feed its watchdog.", 3100); // a verbose log with code 3100
 			return type;
 
 		case CMD_STRING:
-			Log("Service " + msg + "sends a message " + GetRcvMsg() + " to the main. ");
+			Log("Service " + msg + "sends a message " + GetRcvMsg() + " to the main. ", 2120); // a debug log with code 2120
 			return type;
 
 		case CMD_DOWN:
@@ -741,7 +746,7 @@ public:
 		// Auto parse the system configurations
 		case CMD_COMMAND:
 			keyword.assign(m_buf.mText);
-			Log("Get a command: " + keyword + " from " + msg);
+			Log("Get a command: " + keyword + " from " + msg, 2110); // a debug log with code 2110
 			offset = keyword.find_first_of('=');  // find =
 			msg = keyword.substr(offset + 1); // now msg is right of =
 			keyword = keyword.substr(0, offset);  // keyword is left of =
@@ -749,18 +754,14 @@ public:
 			// Update the log severity level
 			if (!keyword.compare("LogSeverityLevel"))
 			{
-				int i = atoi(msg.c_str());
-				if (i > 0 && i < 7)
-					m_Severity = i;
+				if (!msg.compare("Info"))
+					m_Severity = 2000;
 
-				if (!msg.compare(sSeverity[3]))
-					m_Severity = 4;
+				if (!msg.compare("Debug"))
+					m_Severity = 3000;
 
-				if (!msg.compare(sSeverity[4]))
-					m_Severity = 5;
-
-				if (!msg.compare(sSeverity[5]))
-					m_Severity = 6;
+				if (!msg.compare("Verbose"))
+					m_Severity = 4000;
 				return m_buf.type;
 			}
 
@@ -795,7 +796,7 @@ public:
 			return type; // return when get a command. No more auto parse
 
 		case CMD_STATUS:
-			Log("Service '" + msg + "' reports its status");
+			Log("Service '" + msg + "' reports its status", 2250);  // a debug log with code 2250
 
 			TotalMsgReceived = 0;
 			TotalMsgSent = 0;
@@ -805,7 +806,7 @@ public:
 			msg.assign(m_buf.mText + offset);
 			offset += msg.length() + 1;
 			memcpy(&len, m_buf.mText + offset + 1, sizeof(len));
-			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len));
+			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len), 2250);
 			offset += sizeof(len) + 1;
 			TotalMsgSent += len;
 
@@ -813,7 +814,7 @@ public:
 			msg.assign(m_buf.mText + offset);
 			offset += msg.length() + 1;
 			memcpy(&len, m_buf.mText + offset, sizeof(len));
-			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len));
+			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len), 2250);
 			offset += sizeof(len) + 1;
 			TotalMsgReceived += len;
 
@@ -823,7 +824,7 @@ public:
 			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
 			memcpy(&len, m_buf.mText + offset, sizeof(len));
 			msg.append(to_string(len));
-			Log(msg);
+			Log(msg, 2250);
 			offset += sizeof(len) + 1;
 
 			// status
@@ -834,7 +835,7 @@ public:
 			msg.append(sState[m_buf.mText[offset++]] + " ");
 			msg.append(sState[m_buf.mText[offset++]] + " ");
 			msg.append(sState[m_buf.mText[offset++]]);
-			Log(msg);
+			Log(msg, 2250);
 			offset++;
 
 			// subscriptions
@@ -844,7 +845,7 @@ public:
 			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
 			for (size_t i = 0; i < len; i++)
 				msg.append(to_string(m_buf.mText[offset + i]) + " ");
-			Log(msg);
+			Log(msg, 2250);
 			offset += len + 1;
 
 			// clients
@@ -854,29 +855,27 @@ public:
 			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
 			for (size_t i = 0; i < len; i++)
 				msg.append(to_string(m_buf.mText[offset + i]) + " ");
-			Log(msg);
+			Log(msg, 2250);
 			offset += len + 1;
 
 			return type;
 
 		default:
-			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len) + " from " + msg);
+			Log("Gets a message '" + GetRcvMsg() + "' with type of " + to_string(type) + " and length of " + to_string(len) + " from " + msg, 505); // a warning log with code 505
 		}
 		return type;
 	}
 
 	// print the log from local with given severity
-	bool Log(string msg, char Severity = 4)
+	bool Log(string msg, int ErrorCode = 1000)
 	{
-		if (Severity > m_Severity)
+		if (ErrorCode >= m_Severity)
 			return false;
-
-		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-		string sql = "INSERT INTO AppLog VALUES (";
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
 
+		//string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
 		//int rst = sqlite3_bind_int(m_log, 1, tv.tv_sec);
 		//rst += sqlite3_bind_int(m_log, 2, tv.tv_usec);
 		//rst += sqlite3_bind_text(m_log, 3, "MAIN", -1, SQLITE_STATIC);
@@ -905,12 +904,19 @@ public:
 		//sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
 		//sql.append(GetServiceTitle(m_MsgChn) + "', ");
 		//sql.append(to_string(m_MsgChn) + ", ");
-		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec));
-		sql.append(", 'MAIN', 1, ");
-		sql.append(to_string(Severity) + ", '");
-		sql.append(msg + "', 0, 0);");
-		//tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
-		//sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
+
+		//sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec));
+		//sql.append(", 'MAIN', 1, ");
+		//sql.append(to_string(Severity) + ", '");
+		//sql.append(msg + "', 0, 0);");
+
+		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
+		string sql = "INSERT INTO AppLog VALUES (null, '";  // The ID is set auto increment
+		sql.append(getDateTime(tv.tv_sec, tv.tv_usec));
+		sql.append("', 'MAIN', ");
+		sql.append(to_string(ErrorCode) + ", '");
+		sql.append(msg + "', ");
+		sql.append(to_string(m_Pids[1]) + ");");
 
 		pthread_t thread;
 		struct thread_data *threadata = new thread_data;
@@ -929,27 +935,44 @@ public:
 	// print the log from service module
 	bool Log()
 	{
-		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-		string sql = "INSERT INTO AppLog VALUES ( ";
+	//	string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
 
+		//struct timeval tv;
+		//gettimeofday(&tv, nullptr);
+		//
+		//string msg;
+		//msg.assign(m_buf.mText + 1);
+		//char Severity = m_buf.mText[0];
+		//if (Severity > 6)
+		//	Severity = 6;
+		//if (Severity < 1)
+		//	Severity = 1;
+
+		int ErrorCode;
+		size_t offset;
+		memcpy(&ErrorCode, m_buf.mText, sizeof(ErrorCode));
+		offset = sizeof(ErrorCode);
+		string msg(m_buf.mText + offset);
+		
+		offset = msg.find_first_of(39);
+		while (offset != string::npos) // replace those ' to `
+		{
+			msg.erase(offset);
+			msg.insert(offset, 1, '`');
+			offset = msg.find_first_of(39);
+		}
+	
+		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
+		string sql = "INSERT INTO AppLog VALUES (null, '";
+		sql.append(getDateTime(m_MsgTS_sec, m_MsgTS_usec) + "', '");
+		sql.append(GetServiceTitle(m_MsgChn) + "', ");
+		sql.append(to_string(ErrorCode) + ", '");
+		sql.append(msg + "', ");
+		//sql.append(to_string(m_Pids[m_MsgChn]) + " ); ");
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
-		
-		string msg;
-		msg.assign(m_buf.mText + 1);
-		char Severity = m_buf.mText[0];
-		if (Severity > 6)
-			Severity = 6;
-		if (Severity < 1)
-			Severity = 1;
-
-		sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
-		sql.append(GetServiceTitle(m_MsgChn) + "', ");
-		sql.append(to_string(m_MsgChn) + ", ");
-		sql.append(to_string(Severity) + ", '");
-		sql.append(msg + "', ");
-		tv.tv_usec = tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec;
-		sql.append(to_string(m_MsgTS_sec) + ", " + to_string(tv.tv_usec) + "); ");
+		offset = (tv.tv_sec - m_MsgTS_sec) * 1000000 + tv.tv_usec - m_MsgTS_usec;
+		sql.append(to_string(offset) + " ); ");
 		//cout << sql << endl;
 
 		pthread_t thread;

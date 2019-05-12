@@ -37,7 +37,7 @@ ServiceUtils::ServiceUtils()
 	m_TotalServiceDataElements = 0;
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
-	m_Severity = 4;  // Information
+	m_Severity = 2000;  // Information
 	m_AutoPublish = true;  // Enable service data auto update by default
 	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
 	m_AutoSleep = true; // Enable auto sleep by default
@@ -98,7 +98,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_TotalServiceDataElements = 0;
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
-	m_Severity = 4;
+	m_Severity = 2000;  // The default severity level Info corresponds to error code < 2000
 	m_AutoPublish = true;  // Enable service data auto update by default
 	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
 	m_AutoSleep = true; // Enable auto sleep by default
@@ -322,7 +322,7 @@ bool ServiceUtils::ReSendMsgTo(long ServiceChannel)
 }
 
 //Subscribe the service from the service provider with specified title
-bool ServiceUtils::ServiceSubscribe(string ServiceTitle)
+bool ServiceUtils::SubscribeService(string ServiceTitle)
 {
 	long ServiceChannel = GetServiceChannel(ServiceTitle);
 	if (ServiceChannel < 1)
@@ -354,7 +354,7 @@ bool ServiceUtils::ServiceSubscribe(string ServiceTitle)
 };
 
 // query the service data from the service provider with specified title
-bool ServiceUtils::ServiceQuery(string ServiceTitle)
+bool ServiceUtils::QueryService(string ServiceTitle)
 {
 	if (m_ID == -1)
 	{
@@ -611,10 +611,6 @@ size_t ServiceUtils::ChkNewMsg()
 					m_TotalProperties++;
 				}
 
-				// map the system pre-defined SeverityLevel element
-				if (keyword == "SeverityLevel" && n == sizeof(m_Severity))
-					m_pptr[i]->ptr = &m_Severity; 
-
 				if (m_pptr[i]->len) // type 0 means a string which shall be assigned the value in a different way
 				{
 					if (!m_pptr[i]->ptr)  // make sure the pointer is not NULL before assign any value to it
@@ -733,18 +729,14 @@ size_t ServiceUtils::ChkNewMsg()
 			// Update the log severity level
 			if (!keyword.compare("LogSeverityLevel"))
 			{
-				int i = atoi(msg.c_str());
-				if (i > 0 && i < 7)
-					m_Severity = i;
-
 				if (!msg.compare("Info"))
-					m_Severity = 4;
+					m_Severity = 2000;
 
 				if (!msg.compare("Debug"))
-					m_Severity = 5;
+					m_Severity = 3000;
 
 				if (!msg.compare("Verbose"))
-					m_Severity = 6;
+					m_Severity = 4000;
 				return m_buf.type;
 			}
 
@@ -813,7 +805,7 @@ size_t ServiceUtils::ChkNewMsg()
 			strcpy(m_buf.mText + offset, "States");
 			offset += 7;
 			m_buf.mText[offset++] = 0; // it is a string
-			m_buf.mText[offset++] = m_Severity & 0xFF;
+			m_buf.mText[offset++] = (m_Severity >> 4) & 0xFF;
 			m_buf.mText[offset++] = m_AutoPublish ? 1 : 0;
 			m_buf.mText[offset++] = m_AutoWatchdog ? 1 : 0;
 			m_buf.mText[offset++] = m_AutoSleep ? 1 : 0;
@@ -856,13 +848,11 @@ size_t ServiceUtils::ChkNewMsg()
 				m_err = errno;
 				return m_buf.type;
 			}
-			else
-			{
-				m_err = 0;
-				m_TotalMessageSent++;
-				m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-				offset = 0;
-			}
+
+			m_err = 0;
+			m_TotalMessageSent++;
+			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+			offset = 0;
 			break;
 
 		default:
@@ -919,7 +909,7 @@ bool ServiceUtils::WatchdogFeed()
 
 // Send a Log to main module with specified severe level
 // Sending format is [LogType][LogContent]
-bool ServiceUtils::Log(string logContent, char Severity)
+bool ServiceUtils::Log(string logContent, int ErrorCode)
 {
 	// Message queue has not been opened
 	if (m_ID == -1)
@@ -929,7 +919,7 @@ bool ServiceUtils::Log(string logContent, char Severity)
 	}
 
 	// Log those with equal or lower level of severity
-	if (Severity > m_Severity)
+	if (ErrorCode >= m_Severity)
 		return false;
 
 	struct timeval tv;
@@ -937,20 +927,23 @@ bool ServiceUtils::Log(string logContent, char Severity)
 	m_buf.sChn = m_Chn;
 	m_buf.type = CMD_LOG;
 
-	// breakdown the log into short logs in case it is very long
+	// segmental the log into short logs in case it is very long
 	size_t len;
-	while (len = logContent.length())
+	while (len = logContent.length())  // no log when the content is empty
 	{
 		gettimeofday(&tv, nullptr);
 		m_buf.sec = tv.tv_sec;  //update the timestamp
 		m_buf.usec = tv.tv_usec;
 
+		int offset = 0;
 		if (len > 200)
 			len = 200;
-		memcpy(m_buf.mText, &Severity, sizeof(Severity));
-		memcpy(m_buf.mText + sizeof(Severity), logContent.c_str(), len);
-		m_buf.mText[len + sizeof(Severity)] = 0; // add a /0 in the end anyway
-		m_buf.len = len + sizeof(Severity) + 1;
+		memcpy(m_buf.mText, &ErrorCode, sizeof(ErrorCode));
+		offset += sizeof(ErrorCode);
+		memcpy(m_buf.mText + offset, logContent.c_str(), len);
+		offset += len;
+		m_buf.mText[offset] = 0; // add a /0 in the end anyway
+		m_buf.len = offset + 1; // include the /0 at the tail
 
 		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 		{
@@ -971,7 +964,7 @@ bool ServiceUtils::Log(string logContent, char Severity)
 
 bool ServiceUtils::Log(string logContent)
 {
-	return Log(logContent, 4);
+	return Log(logContent, 1000);
 }
 
 // assign *p to store the variable queried from the database with length len, len=0 for string
@@ -1089,7 +1082,7 @@ bool ServiceUtils::AddToServiceData(string keyword, int *n)
 }
 
 // Send a request to database main module to query for the value of keyword. The results will sent back automatically by main module.
-bool ServiceUtils::AskforConfigures()
+bool ServiceUtils::QueryConfigures()
 {
 	if (m_Chn == 1)
 		return false; // No database query for the main module

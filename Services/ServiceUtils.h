@@ -99,8 +99,8 @@ public:
 	long GetServiceChannel(string ServiceTitle); // Get the corresponding service type to ServiceTitle, return 0 for not found
 	string GetServiceTitle(long ServiceChannel); // Get the corresponding service title to ServiceType, return "" for not found
 
-	bool ServiceSubscribe(string ServiceTitle); // Subscribe a service by its title
-	bool ServiceQuery(string ServiceTitle); // Ask for service data from specified service provider
+	bool SubscribeService(string ServiceTitle); // Subscribe a service by its title
+	bool QueryService(string ServiceTitle); // Ask for service data from specified service provider
 	bool SndCmd(string msg, string ServiceTitle); // Send a command in string to specified service provider
 	bool SndMsg(void *p, size_t type, size_t len, long ServiceChannel); // Send a packet with given length to specified service provider with channel
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
@@ -111,7 +111,7 @@ public:
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
 	bool WatchdogFeed(); // smart feed the watchdog for this module in main module
-	bool Log(string logContent, char Severity); // Send a log to main module which will save this log into database. It is controlled by log level
+	bool Log(string logContent, int ErrorCode); // Send a log to main module which will save this log into database. It is controlled by log level
 	bool Log(string logContent); // Send a log to main module which will save this log into database. It is controlled by log level
 
 	bool LocalMap(string keyword, void *p, char len); // map local *p with length len (0 for string) to be one of the local property, function in database actions and messages
@@ -124,6 +124,6 @@ public:
 
 	 // send a command to the main module to ask for configures from the database. 
 	// The results will be auto parsed in ChkNewMsg() where configures are stored in variables mapped before or later.
-	bool AskforConfigures();
+	bool QueryConfigures();
 	bool UpdateConfigures(); // send the configures back to main module and update the corresponding tables in the database.
 };
