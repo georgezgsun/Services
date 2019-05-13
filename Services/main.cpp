@@ -21,6 +21,13 @@ struct thread_data
 	string * sql;
 };
 
+struct thread_buf
+{
+	long rChn;  // Receiver type
+	long sChn; // Sender Type
+	char mText[255];  // message payload
+};
+
 void *LogInDB(void * threadArg)
 {
 	struct thread_data *my_data;
@@ -33,6 +40,33 @@ void *LogInDB(void * threadArg)
 	}
 	delete static_cast<thread_data*>(threadArg)->sql;
 	pthread_exit(NULL);
+}
+
+void LogInsert()
+{
+	key_t t_Key = getpid();
+
+	t_Key = 12345;
+	int t_ID = msgget(t_Key, 0x444);  // message queue for read-only
+	long t_Chn = 255;
+	struct thread_buf t_buf;
+	sqlite3_stmt * stmt;
+	sqlite3 *db;
+	string sql;
+
+	while (true)
+	{
+		int len = msgrcv(t_ID, &t_buf, sizeof(t_buf), t_Chn, 0); // this is a blocking read
+		if (!len)
+			continue;
+		
+		memcpy(&db, t_buf.mText, sizeof(db));
+		sql.assign(t_buf.mText + sizeof(db));
+		int t_err = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0);
+		if (t_err)
+			continue;
+
+	};
 }
 
 class MainModule : public ServiceUtils
@@ -607,10 +641,6 @@ public:
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
 
-		// Check the watchdog only in the second half of a second
-		if (tv.tv_usec < 500000)
-			return 0;
-
 		// m_Clients stores all onboard services
 		for (size_t i = 0; i < m_TotalClients; i++)
 		{
@@ -630,7 +660,8 @@ public:
 	size_t ChkNewMsg()
 	{
 		memset(m_buf.mText, 0, sizeof(m_buf.mText));  // fill 0 before reading, make sure no garbage left over
-		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT);
+		//long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT);
+		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, 0);
 		l -= m_HeaderLength;
 		m_err = static_cast<int>(l);
 		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
@@ -1040,28 +1071,26 @@ int main(int argc, char *argv[])
 	// Simulate the main module/head working
 	while (1)
 	{
+		// check if there is any new message sent to main module. These messages are not auto processed by the library.
+		size_t type = launcher->ChkNewMsg();
+
+		if (type == CMD_COMMAND)
+		{
+			msg = launcher->GetRcvMsg();
+			cout << "MAIN gets a command " << msg << " from " << launcher->GetServiceTitle(launcher->m_MsgChn) << endl;
+		}
+
 		// check the watch dog
 		size_t chn = launcher->CheckWatchdog();
 		if (chn)
 		{
-			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn) 
+			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn)
 				<< "' stops responding on channel " << chn << endl;
 
 			launcher->KillService(chn);
 			if (launcher->RunService(chn))
 				cout << "MAIN restarts service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
 			continue;
-		}
-
-		// check if there is any new message sent to main module. These messages are not auto processed by the library.
-		size_t type = launcher->ChkNewMsg();
-		if (!type)
-			continue;
-
-		if (type == CMD_COMMAND)
-		{
-			msg = launcher->GetRcvMsg();
-			cout << "MAIN gets a command " << msg << " from " << launcher->GetServiceTitle(launcher->m_MsgChn) << endl;
 		}
 	}
 }

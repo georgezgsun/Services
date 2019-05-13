@@ -89,7 +89,7 @@
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <RemotePostBuildEvent>
-      <Command>cp $(RemoteTargetPath) $(RemoteRootDir)/lib</Command>
+      <Command>mkdir $(RemoteRootDir)/lib; cp $(RemoteTargetPath) $(RemoteRootDir)/lib</Command>
     </RemotePostBuildEvent>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

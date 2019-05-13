@@ -78,7 +78,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IncludePath>/usr/local/include;/usr/include;$(IncludePath)</IncludePath>
     <LibraryPath>/usr/local/lib;$(LibraryPath)</LibraryPath>
-    <SourcePath>/usr/include;/usr/local/include;$(SourcePath)</SourcePath>
+    <SourcePath>/usr/include;/usr/local/include;$(IncludePath);$(SourcePath)</SourcePath>
   </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />

@@ -22,7 +22,7 @@ ServiceUtils::ServiceUtils()
 
 	m_Chn = 1;
 	m_Key = getpid();
-	m_Key = 12345; // for debug purpose 
+	//m_Key = 12345; // for debug purpose 
 	m_Title.assign("MAIN");
 
 	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
@@ -77,7 +77,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	if (argc > 2)
 		m_Title.assign(argv[2]);
 
-	m_Key = 12345;  // This is for debug purpose
+	//m_Key = 12345;  // This is for debug purpose
 	if (argc > 3)
 		m_Key = atoi(argv[3]);
 	if (m_Key < 0)
@@ -557,7 +557,7 @@ size_t ServiceUtils::ChkNewMsg()
 				offset += m_ServiceTitles[m_TotalServices++].length() + 1; // increase the m_TotalServices, update the offset to next
 			} while (offset < m_buf.len);
 			Log(m_Title + " received new services list from the main module.  There are " 
-				+ to_string(m_TotalServices) + " services in the list.", 4);
+				+ to_string(m_TotalServices) + " services in the list.");
 			break; // continue to read next message
 
 		// auto process the database feedback from the main module
