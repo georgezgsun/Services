@@ -76,6 +76,7 @@ int main(int argc, char *argv[])
 		nowtm = localtime(&tv.tv_sec);
 		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
+		time = tv.tv_sec;
 
 		command = tester->ChkNewMsg();
 		if (command)
@@ -125,7 +126,6 @@ int main(int argc, char *argv[])
 		if (tester->WatchdogFeed())
 		{
 			count--;
-			//cout << datetime << " : " << myTitle << " counts down " << count << endl;
 
 			if (count <= 0)
 			{

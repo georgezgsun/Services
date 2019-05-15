@@ -10,62 +10,130 @@
 #include <sqlite3.h>
 #include <pthread.h>
 #include <signal.h>
+#include <functional>
+#include <future>
 
 #include "ServiceUtils.h"
 
 using namespace std;
 
-struct thread_data
+string getDateTime(time_t tv_sec, time_t tv_usec)
 {
-	sqlite3 * logPath;
-	string * sql;
-};
+	struct tm *nowtm;
+	char tmbuf[64], buf[64];
 
-struct thread_buf
-{
-	long rChn;  // Receiver type
-	long sChn; // Sender Type
-	char mText[255];  // message payload
-};
-
-void *LogInDB(void * threadArg)
-{
-	struct thread_data *my_data;
-	my_data = static_cast<struct thread_data *>(threadArg);
-	char *zErrMsg = 0;
-	if (sqlite3_exec(my_data->logPath, my_data->sql->c_str(), nullptr, 0, &zErrMsg) != SQLITE_OK)
-	{
-		fprintf(stderr, "Cannot insert new log from MAIN into AppLog table with error: %s\n", zErrMsg);
-		sqlite3_free(zErrMsg);
-	}
-	delete static_cast<thread_data*>(threadArg)->sql;
-	pthread_exit(NULL);
+	nowtm = localtime(&tv_sec);
+	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
+	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
+	return buf;
 }
 
-void LogInsert()
+void *LogInsert(void * my_void_ptr)
 {
 	key_t t_Key = getpid();
 
-	t_Key = 12345;
-	int t_ID = msgget(t_Key, 0x444);  // message queue for read-only
-	long t_Chn = 255;
-	struct thread_buf t_buf;
+	//t_Key = 12345;
+	int t_ID = msgget(t_Key, 0444 | IPC_CREAT);  // message queue for read-only
+	long t_Chn = 2;
+	struct MsgBuf t_buf;
 	sqlite3_stmt * stmt;
 	sqlite3 *db;
-	string sql;
+	string Titles[255];
+	string LogPath;
+	//LogPath.assign(static_cast<string *>(my_void_ptr)->c_str());
+	LogPath.assign(static_cast<const char *>(my_void_ptr));
+
+	// connect the logs database
+	int rst = sqlite3_open(LogPath.c_str(), &db);
+	if (rst)
+	{
+		fprintf(stderr, "Failed to open the log database at %s with error: %s\n",
+			LogPath.c_str(), sqlite3_errmsg(db));
+		pthread_exit(NULL);
+	}
+	
+	string sql = "CREATE TABLE IF NOT EXISTS 'AppLog' ("
+		"`ID`	INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+		"`Date Time`	TEXT NOT NULL,"
+		"`Service`	TEXT NOT NULL,"
+		"`Error Code`	INTEGER NOT NULL,"
+		"`Content`	TEXT,"
+		"`Pid`	INTEGER	);";
+	//rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
+	//if (rst)
+	//	fprintf(stderr, "Failed to prepare the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+	//rst = sqlite3_step(stmt);
+	//if (rst)
+	//	fprintf(stderr, "Failed to execute the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+	//rst = sqlite3_finalize(stmt);
+
+	// prepare statement of log insert
+	//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
+	sql = "INSERT INTO AppLog VALUES ( null, ?, ?, ?, ?, ? );";
+	rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
+	if (rst != SQLITE_OK)
+		fprintf(stderr, "Failed to prepare statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
 
 	while (true)
 	{
-		int len = msgrcv(t_ID, &t_buf, sizeof(t_buf), t_Chn, 0); // this is a blocking read
-		if (!len)
-			continue;
-		
-		memcpy(&db, t_buf.mText, sizeof(db));
-		sql.assign(t_buf.mText + sizeof(db));
-		int t_err = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, 0);
-		if (t_err)
+		int len = msgrcv(t_ID, &t_buf, sizeof(t_buf), 2, 0); // this is a blocking read
+		if (len <= 0)
 			continue;
 
+		if (t_buf.type == CMD_LIST)
+		{
+			int offset = 0;
+			int TotalServices = 0;
+			char chn;
+
+			do
+			{
+				chn = t_buf.mText[offset++];
+				Titles[chn].assign(t_buf.mText + offset);
+				offset += Titles[chn].length() + 1; // increase the m_TotalServices, update the offset to next
+			} while (offset < t_buf.len);
+		}
+		else if (t_buf.type == CMD_STRING)
+		{
+			LogPath.assign(t_buf.mText);
+			fprintf(stderr, "(LOG) Get new log path as %s.\n", LogPath.c_str());
+		}
+
+		if (t_buf.type != CMD_LOG)
+			continue;
+
+		struct timeval tv;
+		gettimeofday(&tv, nullptr);
+
+		int dt = (tv.tv_sec - t_buf.sec) * 1000000 + tv.tv_usec - t_buf.usec;
+		int ErrorCode;
+		size_t offset;
+		memcpy(&ErrorCode, t_buf.mText, sizeof(ErrorCode));
+		offset = sizeof(ErrorCode);
+		string msg(t_buf.mText + offset);
+
+		string date = getDateTime(t_buf.sec, t_buf.usec);
+		rst = sqlite3_bind_text(stmt, 1, date.c_str(), date.length(), SQLITE_STATIC);
+		if (rst != SQLITE_OK)
+			fprintf(stderr, "Failed to bind date time %s into statement %s with error: %s\n", date.c_str(), sql.c_str(), sqlite3_errmsg(db));
+		rst = sqlite3_bind_text(stmt, 2, Titles[t_buf.sChn].c_str(), Titles[t_buf.sChn].length(), SQLITE_STATIC); // The service title of that channel. TODO get the service list
+		if (rst != SQLITE_OK)
+			fprintf(stderr, "Failed to bind service title %s into statement %s with error: %s\n", Titles[t_buf.sChn].c_str(), sql.c_str(), sqlite3_errmsg(db));
+		rst = sqlite3_bind_int(stmt, 3, ErrorCode);
+		if (rst != SQLITE_OK)
+			fprintf(stderr, "Failed to bind Error Code %d into statement %s with error: %s\n", ErrorCode, sql.c_str(), sqlite3_errmsg(db));
+		rst = sqlite3_bind_text(stmt, 4, msg.c_str(), msg.length(), SQLITE_STATIC);
+		if (rst != SQLITE_OK)
+			fprintf(stderr, "Failed to bind log content %s into statement %s with error: %s\n", msg.c_str(), sql.c_str(), sqlite3_errmsg(db));
+		rst = sqlite3_bind_int(stmt, 5, dt);
+		if (rst != SQLITE_OK)
+			fprintf(stderr, "Failed to bind tid %d into statement %s with error: %s\n", dt, sql.c_str(), sqlite3_errmsg(db));
+
+		rst = sqlite3_step(stmt);
+		if (rst != SQLITE_DONE)
+			fprintf(stderr, "Failed to execute statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+
+		rst = sqlite3_reset(stmt);  // this is required before next bind
 	};
 }
 
@@ -116,18 +184,8 @@ public:
 		if (argc > 2)
 			logPath = path.append(argv[2]);
 
-		// connect the logs database
-		int rst = sqlite3_open(logPath.c_str(), &m_Logdb);
-		if (rst)
-		{
-			m_err = -2;
-			fprintf(stderr, "Failed to open the log database at %s with error: %s\n", 
-				logPath.c_str(), sqlite3_errmsg(m_Logdb));
-			return false;
-		}
-
 		// connect the configure database
-		rst = sqlite3_open(configPath.c_str(), &m_Confdb);
+		int rst = sqlite3_open(configPath.c_str(), &m_Confdb);
 		if (rst)
 		{
 			m_err = -3;
@@ -135,18 +193,10 @@ public:
 				configPath.c_str(), sqlite3_errmsg(m_Confdb));
 			return false;
 		}
-
 		m_err = 0;
 
-		// prepare statement of log insert
-		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
-		string sql = "INSERT INTO AppLog VALUES ( null, ?, ?, ?, ?, ? );";
-		m_err = sqlite3_prepare_v2(m_Logdb, sql.c_str(), -1, &m_log, 0);
-		if (m_err)
-			fprintf(stderr, "Failed to execute statement %s with error: %s\n", sql, sqlite3_errmsg(m_Logdb));
-
 		// query the startup table in configure database
-		sql = "SELECT * FROM STARTUP;";
+		string sql = "SELECT * FROM STARTUP;";
 		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[0], 0); // the main module config query statement
 		if (m_err)
 		{
@@ -185,7 +235,7 @@ public:
 				break;
 
 			count = sqlite3_column_count(m_ConfStatement[0]);
-			if ( count < 7)
+			if (count < 7)
 			{
 				m_err = -5;
 				fprintf(stderr, "The startup table has not adequate clumns.\n");
@@ -197,17 +247,17 @@ public:
 			Chn = sqlite3_column_int(m_ConfStatement[0], 2);  // The channel
 			m_ServiceTitles[Chn].assign((const char*)sqlite3_column_text(m_ConfStatement[0], 1)); // The service title
 			m_ServiceChannels[Chn] = Chn;
-			read = sqlite3_column_text(m_ConfStatement[0], 3); 
+			read = sqlite3_column_text(m_ConfStatement[0], 3);
 			if (read)
 				m_ModulePath[Chn].assign((const char*)read);  // The module path
 			else
 				m_ModulePath[Chn].clear(); // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[0], 4);
+			read = sqlite3_column_text(m_ConfStatement[0], 4);
 			if (read)
 				m_ConfTable[Chn].assign((const char*)read);  // The config table
 			else
 				m_ConfTable[Chn].clear();  // in case it is null
-			read =sqlite3_column_text(m_ConfStatement[0], 5); // The watchdog reload, restart, or reboot
+			read = sqlite3_column_text(m_ConfStatement[0], 5); // The watchdog reload, restart, or reboot
 			m_ActionWatchdog[Chn] = 0;
 			if (read)
 			{
@@ -233,7 +283,7 @@ public:
 			m_ServiceData[m_ServiceDataLength++] = Chn & 0xFF;
 			strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
 			m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
-			
+
 			// prepare the query of configure table
 			int offset = m_ConfTable[Chn].find_first_of(':'); // position of :
 			ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
@@ -255,13 +305,24 @@ public:
 			m_TotalServices++;
 		} while (true);
 
-		// 
+		// TODO
+		// Start the log thread and send the logPath
+		pthread_t thread;
+		rst = pthread_create(&thread, NULL, LogInsert, (void *)logPath.c_str());
+		if (rst)
+		{
+			printf("Cannot create the log thread. %d\n", rst);
+			return false;
+		}
+
+		// send the service list to Log thread
+		SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
 		return true;
 	}
 
 	bool RunService(int Channel)
 	{
-		if (Channel <=1 || Channel > 255)
+		if (Channel <= 1 || Channel > 255)
 		{
 			fprintf(stderr, "Cannot start the service. The channel specified %d is invalid.\n", Channel);
 			Log("Cannot start the service. The channel specified " + to_string(Channel) + " is invalid", 120); // Error code 120.
@@ -274,7 +335,7 @@ public:
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
-		m_WatchdogTimer[Channel] = tv.tv_sec;
+		m_WatchdogTimer[Channel] = tv.tv_sec;  // update the watchdog timer. It will be restarted in case the luanching fails
 
 		int p;
 		bool rst{ true };
@@ -358,7 +419,7 @@ public:
 		int rst = kill(m_Pids[Channel], 0);
 		if (rst < 0)
 		{
-			fprintf(stderr, "The process of service '%s' has errno=%d. Shall kill it roughly.\n", 
+			fprintf(stderr, "The process of service '%s' has errno=%d. Shall kill it roughly.\n",
 				m_ServiceTitles[Channel].c_str(), errno);
 			rst = kill(m_Pids[Channel], SIGKILL);
 		}
@@ -388,7 +449,7 @@ public:
 
 		// Clean all the messages sent to those not onboard service
 		int count;
-		for (i = 2; i < 255; i++)
+		for (i = 3; i < 255; i++)
 		{
 			if (!buf[i])
 			{
@@ -460,7 +521,7 @@ public:
 
 		size_t i = m_MsgChn;
 		string tmp;
-		
+
 		// query multiple rows in case need to transfer the whole table
 		int ID{ 0 };
 		const unsigned char *read;
@@ -689,7 +750,7 @@ public:
 		string msg;
 
 		// reset the watchdog timer for that channel
-		m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec; 
+		m_WatchdogTimer[m_MsgChn] = m_MsgTS_sec;
 
 		// no auto reply for those normal receiving. type < 31 commands; 32 is string. 33 is integer. anything larger are user defined types
 		if (type >= 32)
@@ -705,7 +766,7 @@ public:
 		case CMD_ONBOARD:
 			// update onboard list which is stored at m_Clients[]
 			for (i = 0; i < m_TotalClients; i++)
-			{ 
+			{
 				if (m_Clients[i] == m_MsgChn)
 					break;
 			}
@@ -743,10 +804,6 @@ public:
 			Log("Service " + msg + " updates its database elements.");
 			return type;
 
-		case CMD_LOG:
-			Log();
-			return type;
-
 		case CMD_DATABASEQUERY:
 			ReplyDBQuery();
 			Log("Service " + msg + " requests database query.", 2105); // a debug log
@@ -763,8 +820,6 @@ public:
 		case CMD_DOWN:
 			Log("Service " + msg + " reports down. Informs every sub modules.");
 
-			// broadcast the message that one channel has down
-			//InformDown();
 			// to inform every running service module that this service has down
 			m_buf.sChn = m_MsgChn;
 			m_buf.len = 0;
@@ -774,10 +829,9 @@ public:
 
 			return type;
 
-		// Auto parse the system configurations
+			// Auto parse the system configurations
 		case CMD_COMMAND:
 			keyword.assign(m_buf.mText);
-			Log("Get a command: " + keyword + " from " + msg, 2110); // a debug log with code 2110
 			offset = keyword.find_first_of('=');  // find =
 			msg = keyword.substr(offset + 1); // now msg is right of =
 			keyword = keyword.substr(0, offset);  // keyword is left of =
@@ -905,140 +959,56 @@ public:
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
+		m_buf.sec = tv.tv_sec;  //update the timestamp
+		m_buf.usec = tv.tv_usec;
 
-		//string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-		//int rst = sqlite3_bind_int(m_log, 1, tv.tv_sec);
-		//rst += sqlite3_bind_int(m_log, 2, tv.tv_usec);
-		//rst += sqlite3_bind_text(m_log, 3, "MAIN", -1, SQLITE_STATIC);
-		//rst += sqlite3_bind_int(m_log, 4, 1);
-		//rst += sqlite3_bind_int(m_log, 5, Severity);
-		//rst += sqlite3_bind_text(m_log, 6, msg.c_str(), -1, SQLITE_STATIC);
-		//rst += sqlite3_bind_int(m_log, 7, m_MsgTS_sec);
-		//rst += sqlite3_bind_int(m_log, 8, tv.tv_usec > m_MsgChn ? tv.tv_usec - m_MsgTS_usec : 1000000L + tv.tv_usec - m_MsgTS_usec);
+		m_buf.rChn = 2; // log is always sent to main module
+		m_buf.sChn = m_Chn;
+		m_buf.type = CMD_LOG;
 
-		//if (rst != SQLITE_OK)
-		//{
-		//	fprintf(stderr, "Error while bind parameters %d.\n", rst);
-		//	return false;
-		//}
+		memcpy(m_buf.mText, &ErrorCode, sizeof(ErrorCode));
+		int offset = sizeof(ErrorCode);
+		strcpy(m_buf.mText + offset, msg.c_str());
+		offset += msg.length() + 1;
+		m_buf.mText[offset++] = 0; // add a /0 in the end anyway
+		m_buf.len = offset; // include the /0 at the tail
 
-		//rst = sqlite3_step(m_log);
-
-		//if (rst != SQLITE_DONE)
-		//{
-		//	fprintf(stderr, "Cannot insert %s into the log database:%s\n", msg.c_str(), sqlite3_errmsg(m_Logdb));
-		//	return false;
-		//}
-		//rst = sqlite3_clear_bindings(m_log);
-		//return true;
-
-		//sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec) + ", '");
-		//sql.append(GetServiceTitle(m_MsgChn) + "', ");
-		//sql.append(to_string(m_MsgChn) + ", ");
-
-		//sql.append(to_string(tv.tv_sec) + ", " + to_string(tv.tv_usec));
-		//sql.append(", 'MAIN', 1, ");
-		//sql.append(to_string(Severity) + ", '");
-		//sql.append(msg + "', 0, 0);");
-
-		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
-		string sql = "INSERT INTO AppLog VALUES (null, '";  // The ID is set auto increment
-		sql.append(getDateTime(tv.tv_sec, tv.tv_usec));
-		sql.append("', 'MAIN', ");
-		sql.append(to_string(ErrorCode) + ", '");
-		sql.append(msg + "', ");
-		sql.append(to_string(m_Pids[1]) + ");");
-
-		pthread_t thread;
-		struct thread_data *threadata = new thread_data;
-		threadata->logPath = m_Logdb;
-		threadata->sql = new string(sql);
-
-		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
-		if (rst)
+		if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 		{
-			printf("Cannot create thread. %d\n", rst);
+			m_err = errno;
+			printf("Cannot send message in log with error %d.\n", m_err);
 			return false;
 		}
+
+		m_err = 0;
+		m_TotalMessageSent++;
 		return true;
-	}
-	
-	// print the log from service module
-	bool Log()
-	{
-	//	string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-
-		//struct timeval tv;
-		//gettimeofday(&tv, nullptr);
-		//
-		//string msg;
-		//msg.assign(m_buf.mText + 1);
-		//char Severity = m_buf.mText[0];
-		//if (Severity > 6)
-		//	Severity = 6;
-		//if (Severity < 1)
-		//	Severity = 1;
-
-		int ErrorCode;
-		size_t offset;
-		memcpy(&ErrorCode, m_buf.mText, sizeof(ErrorCode));
-		offset = sizeof(ErrorCode);
-		string msg(m_buf.mText + offset);
-		
-		offset = msg.find_first_of(39);
-		while (offset != string::npos) // replace those ' to `
-		{
-			msg.erase(offset);
-			msg.insert(offset, 1, '`');
-			offset = msg.find_first_of(39);
-		}
-	
-		//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
-		string sql = "INSERT INTO AppLog VALUES (null, '";
-		sql.append(getDateTime(m_MsgTS_sec, m_MsgTS_usec) + "', '");
-		sql.append(GetServiceTitle(m_MsgChn) + "', ");
-		sql.append(to_string(ErrorCode) + ", '");
-		sql.append(msg + "', ");
-		//sql.append(to_string(m_Pids[m_MsgChn]) + " ); ");
-		struct timeval tv;
-		gettimeofday(&tv, nullptr);
-		offset = (tv.tv_sec - m_MsgTS_sec) * 1000000 + tv.tv_usec - m_MsgTS_usec;
-		sql.append(to_string(offset) + " ); ");
-		//cout << sql << endl;
-
-		pthread_t thread;
-		struct thread_data *threadata = new thread_data;
-		threadata->logPath = m_Logdb;
-		threadata->sql = new string(sql);
-
-		int rst = pthread_create(&thread, NULL, LogInDB, (void *)threadata);
-		if (rst)
-		{
-			printf("Cannot create thread. %d\n", rst);
-			return false;
-		}
-		return true;
-	}
-
-	string getDateTime(time_t tv_sec, time_t tv_usec)
-	{
-		struct tm *nowtm;
-		char tmbuf[64], buf[64];
-
-		nowtm = localtime(&tv_sec);
-		strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
-		snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
-		return buf;
-	}
-
-	string GetServiceTitle(long Chn)
-	{
-		if (Chn < 1 || Chn > 255)
-			return "";
-		return m_ServiceTitles[Chn];
 	}
 };
 
+class later
+{
+public:
+	template <class callable, class... arguments>
+	later(int after, bool async, callable&& f, arguments&&... args)
+	{
+		std::function<typename std::result_of<callable(arguments...)>::type()> task(std::bind(std::forward<callable>(f), std::forward<arguments>(args)...));
+
+		if (async)
+		{
+			std::thread([after, task]() {
+				std::this_thread::sleep_for(std::chrono::milliseconds(after));
+				task();
+				}).detach();
+		}
+		else
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(after));
+			task();
+		}
+	}
+
+};
 
 int main(int argc, char *argv[])
 {
@@ -1087,7 +1057,11 @@ int main(int argc, char *argv[])
 			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn)
 				<< "' stops responding on channel " << chn << endl;
 
-			launcher->KillService(chn);
+			if (chn > 15)
+				continue;
+			if (!launcher->KillService(chn))
+				continue;
+
 			if (launcher->RunService(chn))
 				cout << "MAIN restarts service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
 			continue;

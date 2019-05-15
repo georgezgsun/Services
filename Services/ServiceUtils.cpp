@@ -171,7 +171,7 @@ bool ServiceUtils::StartService()
 			return false;
 		}
 	} while (m_TotalServices <= 0);
-	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 4);
+	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 2000);  // This is debug information
 	m_AutoSleep = true;  // enable service data auto update after startup
 	m_AutoWatchdog = true; // enable watchdog auto feed after startup
 	m_AutoPublish = false;  // enable service data auto feed after startup
@@ -438,7 +438,7 @@ bool ServiceUtils::PublishServiceData()
 	return true;
 }; // Multicast the data stored at *p with m_ServiceDataLength and send it to every subscriber
 
-// receive a message from sspecified ervice provider, like GPS, RADAR, TRIGGER. No AutoReply
+// report the messages sit in the buffer just recevied. No AutoReply
 string ServiceUtils::GetRcvMsg()
 {
 	return m_buf.mText;
@@ -522,6 +522,11 @@ size_t ServiceUtils::ChkNewMsg()
 			}
 
 			m_Clients[m_TotalClients++] = m_MsgChn; // increase m_TotalClients by 1
+
+			// Send back the latest service data. It is required in case the service data refresh very slow
+			if (m_ServiceDataLength)
+				SndMsg(m_ServiceData, CMD_SERVICEDATA, m_ServiceDataLength, m_MsgChn); 
+
 			Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 5);
 			break;
 			
@@ -923,7 +928,7 @@ bool ServiceUtils::Log(string logContent, int ErrorCode)
 		return false;
 
 	struct timeval tv;
-	m_buf.rChn = 1; // log is always sent to main module
+	m_buf.rChn = 2; // log is always sent to main module
 	m_buf.sChn = m_Chn;
 	m_buf.type = CMD_LOG;
 
@@ -954,7 +959,7 @@ bool ServiceUtils::Log(string logContent, int ErrorCode)
 
 		m_err = 0;
 		m_TotalMessageSent++;
-		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+		//m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
 
 		// shorten the logContent
 		logContent = logContent.substr(len);
