@@ -38,9 +38,6 @@ ServiceUtils::ServiceUtils()
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
 	m_Severity = 2000;  // Information
-	m_AutoPublish = true;  // Enable service data auto update by default
-	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
-	m_AutoSleep = true; // Enable auto sleep by default
 
 	memset(m_Clients, 0, sizeof(m_Clients));
 	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
@@ -99,9 +96,6 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	m_TotalServices = 0;
 	m_TotalSubscriptions = 0;
 	m_Severity = 2000;  // The default severity level Info corresponds to error code < 2000
-	m_AutoPublish = true;  // Enable service data auto update by default
-	m_AutoWatchdog = true;  // Enable watchdog auto feed by default 
-	m_AutoSleep = true; // Enable auto sleep by default
 
 	memset(m_Clients, 0, sizeof(m_Clients));
 	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
@@ -152,15 +146,12 @@ bool ServiceUtils::StartService()
 	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
 	// Get initialization from the main module;
-	m_AutoPublish = false;  // disable service data auto update during startup
-	m_AutoWatchdog = false; // disable watchdog auto feed during startup
-	m_AutoSleep = false;  // disable auto sleep during startup
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
 
 	count = 0;
 	do
 	{
-		if (!ChkNewMsg())
+		if (!ChkNewMsg(0))
 			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
 		if (count++ >= 100)
@@ -172,9 +163,6 @@ bool ServiceUtils::StartService()
 		}
 	} while (m_TotalServices <= 0);
 	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 2000);  // This is debug information
-	m_AutoSleep = true;  // enable service data auto update after startup
-	m_AutoWatchdog = true; // enable watchdog auto feed after startup
-	m_AutoPublish = false;  // enable service data auto feed after startup
 		
 	// Broadcast my onboard messages to all service channels other than the main module and myself
 	for (size_t i = 1; i < m_TotalServices; i++)
@@ -433,7 +421,7 @@ bool ServiceUtils::PublishServiceData()
 		if (!ReSendMsgTo(m_Clients[i]))
 			return false;
 
-	Log("The service date get auto updated and broadcasted.", 5);
+	Log("The service date get auto updated and broadcasted.", 2005);
 	m_err = 0;
 	return true;
 }; // Multicast the data stored at *p with m_ServiceDataLength and send it to every subscriber
@@ -452,31 +440,33 @@ size_t ServiceUtils::GetRcvMsgBuf(char **p)
 };
 
 // receive a packet from specified service provider. 
-// Auto map and autoreply to default requests.
-size_t ServiceUtils::ChkNewMsg()
+// Auto map and autoreply to default requests. control = blocking | auto publish | auto watch dog | auto sleep
+size_t ServiceUtils::ChkNewMsg(int control)
 {
 	size_t offset = 0;
 	size_t type;
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
+	int flg = control & 0x08 ? 0 : IPC_NOWAIT;
+	struct timeval tv;
 
 	do
 	{
 		memset(m_buf.mText, 0, sizeof(m_buf.mText));  // fill 0 before reading, make sure no garbage left over
-		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT);
+		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, flg);
 		l -= m_HeaderLength;
 		m_err = static_cast<int>(l);
 		if (l < 0)
 		{
 			// Auto update the service data if enabled
-			if (m_AutoPublish)
+			if (control & 0x04)
 				PublishServiceData();
 
 			// Auto feed the watchdog if enabled.
-			if (m_AutoWatchdog)
+			if (control & 0x02)
 				WatchdogFeed();
 
 			// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
-			if (m_AutoSleep)
+			if (control & 0x01)
 				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
 			return 0;
@@ -744,36 +734,7 @@ size_t ServiceUtils::ChkNewMsg()
 					m_Severity = 4000;
 				return m_buf.type;
 			}
-
-			// the flag update of auto service data update
-			if (!keyword.compare("AutoPublish"))
-			{
-				if (!msg.compare("on"))
-					m_AutoPublish = true;
-				if (!msg.compare("off"))
-					m_AutoPublish = false;
-				return m_buf.type;
-			}
-
-			// the flag update of the watchdog auto feed 
-			if (!keyword.compare("AutoWatchdog"))
-			{
-				if (!msg.compare("on"))
-					m_AutoWatchdog = true;
-				if (!msg.compare("off"))
-					m_AutoWatchdog = false;
-				return m_buf.type;
-			}
-
-			// the flag update of auto sleep
-			if (!keyword.compare("AutoSleep"))
-			{
-				if (!msg.compare("on"))
-					m_AutoSleep = true;
-				if (!msg.compare("off"))
-					m_AutoSleep = false;
-			}
-			return type; // return when get a command. No more auto parse
+			return type;
 
 		case CMD_STATUS:
 			if (m_MsgChn != 1)
@@ -790,31 +751,28 @@ size_t ServiceUtils::ChkNewMsg()
 			m_buf.type = CMD_STATUS;
 			
 			strcpy(m_buf.mText + offset, "TotalSent");
-			offset += 10;
+			offset += 10; // 1 + length of "TotalSent"
 			m_buf.mText[offset++] = sizeof(m_TotalMessageSent);
 			memcpy(m_buf.mText + offset, &m_TotalMessageSent, sizeof(m_TotalMessageSent));
 			offset += sizeof(m_TotalMessageSent);
 
 			strcpy(m_buf.mText + offset, "TotalReceived");
-			offset += 14;
+			offset += 14; // 1 + length of "TotalReceived"
 			m_buf.mText[offset++] = sizeof(m_TotalMessageReceived);
 			memcpy(m_buf.mText + offset, &m_TotalMessageReceived, sizeof(m_TotalMessageReceived));
 			offset += sizeof(m_TotalMessageReceived);
 
 			strcpy(m_buf.mText + offset, "dbElements");
-			offset += 11;
+			offset += 11; // 1 + length of "dbElements" 
 			m_buf.mText[offset++] = sizeof(m_TotalDatabaseElements);
 			memcpy(m_buf.mText + offset, &m_TotalDatabaseElements, sizeof(m_TotalDatabaseElements));
 			offset += sizeof(m_TotalDatabaseElements);
 
 			strcpy(m_buf.mText + offset, "States");
-			offset += 7;
-			m_buf.mText[offset++] = 0; // it is a string
-			m_buf.mText[offset++] = (m_Severity >> 4) & 0xFF;
-			m_buf.mText[offset++] = m_AutoPublish ? 1 : 0;
-			m_buf.mText[offset++] = m_AutoWatchdog ? 1 : 0;
-			m_buf.mText[offset++] = m_AutoSleep ? 1 : 0;
-			m_buf.mText[offset++] = 0; // end of the string
+			offset += 7; // 1 + length of "States" 
+			m_buf.mText[offset++] = sizeof(m_Severity); // it is a integer
+			memcpy(m_buf.mText + offset, &m_Severity, sizeof(m_Severity));
+			offset += sizeof(m_Severity);
 
 			strcpy(m_buf.mText + offset, "Subscriptions");
 			offset += 14; // length of Subscriptions\0
@@ -858,6 +816,20 @@ size_t ServiceUtils::ChkNewMsg()
 			m_TotalMessageSent++;
 			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
 			offset = 0;
+			break;
+
+		case CMD_PUBLISHDATA:
+			gettimeofday(&tv, nullptr);
+			memcpy(m_ServiceData, m_buf.mText, m_buf.len); // store the received service data
+			m_ServiceDataLength = m_buf.len;
+			m_buf.type = CMD_SERVICEDATA;
+			m_buf.sec = tv.tv_sec;
+			m_buf.usec = tv.tv_usec;
+
+			// The service provider will broadcast the service data to all its clients
+			for (size_t i = 0; i < m_TotalClients; i++)
+				if (!ReSendMsgTo(m_Clients[i]))
+					return false;
 			break;
 
 		default:
@@ -966,11 +938,6 @@ bool ServiceUtils::Log(string logContent, int ErrorCode)
 	}
 	return true;
 };
-
-bool ServiceUtils::Log(string logContent)
-{
-	return Log(logContent, 1000);
-}
 
 // assign *p to store the variable queried from the database with length len, len=0 for string
 bool ServiceUtils::LocalMap(string keyword, void *p, char len)

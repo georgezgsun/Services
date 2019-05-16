@@ -59,13 +59,13 @@ void *LogInsert(void * my_void_ptr)
 		"`Error Code`	INTEGER NOT NULL,"
 		"`Content`	TEXT,"
 		"`Pid`	INTEGER	);";
-	//rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
-	//if (rst)
-	//	fprintf(stderr, "Failed to prepare the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
-	//rst = sqlite3_step(stmt);
-	//if (rst)
-	//	fprintf(stderr, "Failed to execute the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
-	//rst = sqlite3_finalize(stmt);
+	rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
+	if (rst)
+		fprintf(stderr, "Failed to prepare the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+	rst = sqlite3_step(stmt);
+	if (rst)
+		fprintf(stderr, "Failed to execute the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+	rst = sqlite3_finalize(stmt);
 
 	// prepare statement of log insert
 	//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
@@ -143,9 +143,7 @@ public:
 
 	MainModule()
 	{
-		m_AutoSleep = true;  // Auto sleep is also enabled in main
-		m_AutoPublish = false; // No auto update for service data in main. The m_ServiceData is reused by service list
-		m_AutoWatchdog = false; // No auto watchdog feed at main
+
 	}
 
 	~MainModule()
@@ -180,9 +178,9 @@ public:
 		}
 
 		if (argc > 1)
-			configPath = path.append(argv[1]);
+			configPath = path + argv[1];
 		if (argc > 2)
-			logPath = path.append(argv[2]);
+			logPath = path + argv[2];
 
 		// connect the configure database
 		int rst = sqlite3_open(configPath.c_str(), &m_Confdb);
@@ -221,8 +219,16 @@ public:
 		// assign main module manually here
 		int Chn = 1;
 		m_TotalProperties = 0;
+		m_TotalServices = 0;
 		m_ServiceDataLength = 0;
-		m_Pids[1] = getpid();
+		m_ServiceTitles[m_TotalServices] = "MAIN";
+		m_ServiceChannels[m_TotalServices] = 1;
+		m_ModulePath[m_TotalServices] = argv[0];
+		m_ServiceData[m_ServiceDataLength++] = 1;
+		strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[m_TotalServices].c_str());
+		m_ServiceDataLength += m_ServiceTitles[m_TotalServices].length() + 1;
+		m_Pids[m_TotalServices] = getpid();
+		m_TotalServices++;
 
 		// Loop to query all other modules in startup table
 		do
@@ -279,6 +285,10 @@ public:
 					m_LogSeverityLevel[Chn] = 4000;
 			}
 
+			// No further parse on main module
+			if (Chn == 1)
+				continue;
+
 			// prepare the service list
 			m_ServiceData[m_ServiceDataLength++] = Chn & 0xFF;
 			strcpy(m_ServiceData + m_ServiceDataLength, m_ServiceTitles[Chn].c_str());
@@ -317,12 +327,27 @@ public:
 
 		// send the service list to Log thread
 		SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
+
+		// send the key of the message queue to the pic
+		key_t key = 12345;
+		int p_ID = msgget(key, 0666 | IPC_CREAT);
+
+		m_buf.rChn = 1;
+		m_buf.sChn = getpid();
+		m_buf.len = 0;
+
+		if (msgsnd(p_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+			printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", p_ID, m_buf.len, m_HeaderLength);
+		else 
+			printf("(Debug) Send the key %ld to PIC tester via message %d.\n", m_buf.sChn, p_ID);
+
 		return true;
 	}
 
 	bool RunService(int Channel)
 	{
-		if (Channel <= 1 || Channel > 255)
+		// Channel 1 and 2 are reserved for main and log
+		if (Channel < 3 || Channel > 255)
 		{
 			fprintf(stderr, "Cannot start the service. The channel specified %d is invalid.\n", Channel);
 			Log("Cannot start the service. The channel specified " + to_string(Channel) + " is invalid", 120); // Error code 120.
@@ -362,7 +387,8 @@ public:
 
 	bool KillService(long Channel)
 	{
-		if (Channel <= 1 || Channel > 255)
+		// Channel 1 and 2 are reserved for main and log
+		if (Channel < 3 || Channel > 255)
 			return false;
 
 		// Not run the service in case it is not reload
@@ -484,25 +510,6 @@ public:
 
 		for (size_t i = 0; i < m_TotalClients; i++)
 			ReSendMsgTo(m_Clients[i]);
-		return true;
-	}
-
-	bool InformDown()
-	{
-		// The main informs every sub module that the service on the Channel has down
-		struct timeval tv;
-		gettimeofday(&tv, nullptr);
-		m_buf.rChn = m_MsgChn;
-		m_buf.sChn = m_MsgChn;
-		m_buf.sec = tv.tv_sec;
-		m_buf.usec = tv.tv_usec;
-		m_buf.len = 0; // temporal assigned to 0
-		m_buf.type = CMD_DOWN;
-
-		// broadcast to every sub modules, not main
-		for (size_t i = 1; i < m_TotalClients; i++)
-			ReSendMsgTo(m_Clients[i]);
-
 		return true;
 	}
 
@@ -721,16 +728,11 @@ public:
 	size_t ChkNewMsg()
 	{
 		memset(m_buf.mText, 0, sizeof(m_buf.mText));  // fill 0 before reading, make sure no garbage left over
-		//long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT);
-		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, 0);
+		long l = msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, 0); // blocking read for main
 		l -= m_HeaderLength;
 		m_err = static_cast<int>(l);
-		struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
 		if (l < 0)
-		{
-			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 			return 0;
-		}
 		m_TotalMessageReceived++;
 
 		m_err = 0;
@@ -743,8 +745,6 @@ public:
 		size_t TotalMsgSent;
 		size_t TotalMsgReceived;
 		size_t len;
-		string sSeverity[6]{ "Critical", "Error", "Warning", "Info", "Debug", "Verbose" };
-		string sState[2]{ "off", "on" };
 
 		string keyword;
 		string msg;
@@ -766,10 +766,8 @@ public:
 		case CMD_ONBOARD:
 			// update onboard list which is stored at m_Clients[]
 			for (i = 0; i < m_TotalClients; i++)
-			{
 				if (m_Clients[i] == m_MsgChn)
 					break;
-			}
 			if (i >= m_TotalClients)
 				m_Clients[m_TotalClients++] = m_MsgChn;
 
@@ -781,7 +779,6 @@ public:
 			memcpy(&ppid, m_buf.mText + offset, sizeof(ppid));
 			m_Pids[m_MsgChn] = pid; // store the pid into array
 			Log("A new service " + keyword + " gets onboard at channel " + to_string(m_MsgChn) + " with pid=" + to_string(pid));
-			//cout << keyword << " has a pid=" << pid << endl;
 			if (keyword.compare(msg))
 				Log("The new service title " + keyword + " is not identical to the predefined title " + msg, 140); // an error with code 140
 
@@ -814,7 +811,6 @@ public:
 			return type;
 
 		case CMD_STRING:
-			Log("Service " + msg + "sends a message " + GetRcvMsg() + " to the main. ", 2120); // a debug log with code 2120
 			return type;
 
 		case CMD_DOWN:
@@ -850,99 +846,10 @@ public:
 				return m_buf.type;
 			}
 
-			// the flag update of auto service data update
-			if (!keyword.compare("AutoPublish"))
-			{
-				if (!msg.compare("on"))
-					m_AutoPublish = true;
-				if (!msg.compare("off"))
-					m_AutoPublish = false;
-				return m_buf.type;
-			}
-
-			// the flag update of the watchdog auto feed 
-			if (!keyword.compare("AutoWatchdog"))
-			{
-				if (!msg.compare("on"))
-					m_AutoWatchdog = true;
-				if (!msg.compare("off"))
-					m_AutoWatchdog = false;
-				return m_buf.type;
-			}
-
-			// the flag update of auto sleep
-			if (!keyword.compare("AutoSleep"))
-			{
-				if (msg.compare("on"))
-					m_AutoSleep = true;
-				if (msg.compare("off"))
-					m_AutoSleep = false;
-			}
-			return type; // return when get a command. No more auto parse
-
 		case CMD_STATUS:
 			Log("Service '" + msg + "' reports its status", 2250);  // a debug log with code 2250
 
-			TotalMsgReceived = 0;
-			TotalMsgSent = 0;
-			offset = 0;
-
-			// total messages sent
-			msg.assign(m_buf.mText + offset);
-			offset += msg.length() + 1;
-			memcpy(&len, m_buf.mText + offset + 1, sizeof(len));
-			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len), 2250);
-			offset += sizeof(len) + 1;
-			TotalMsgSent += len;
-
-			// total messages received
-			msg.assign(m_buf.mText + offset);
-			offset += msg.length() + 1;
-			memcpy(&len, m_buf.mText + offset, sizeof(len));
-			Log(msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len), 2250);
-			offset += sizeof(len) + 1;
-			TotalMsgReceived += len;
-
-			// total database elements
-			msg.assign(m_buf.mText + offset);
-			offset += msg.length() + 1;
-			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
-			memcpy(&len, m_buf.mText + offset, sizeof(len));
-			msg.append(to_string(len));
-			Log(msg, 2250);
-			offset += sizeof(len) + 1;
-
-			// status
-			msg.assign(m_buf.mText + offset);
-			offset += msg.length() + 1;
-			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
-			msg.append(sSeverity[m_buf.mText[offset++]] + " ");
-			msg.append(sState[m_buf.mText[offset++]] + " ");
-			msg.append(sState[m_buf.mText[offset++]] + " ");
-			msg.append(sState[m_buf.mText[offset++]]);
-			Log(msg, 2250);
-			offset++;
-
-			// subscriptions
-			msg.assign(m_buf.mText + offset);
-			len = msg.length();
-			offset += len + 1;
-			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
-			for (size_t i = 0; i < len; i++)
-				msg.append(to_string(m_buf.mText[offset + i]) + " ");
-			Log(msg, 2250);
-			offset += len + 1;
-
-			// clients
-			msg.assign(m_buf.mText + offset);
-			len = msg.length();
-			offset += len + 1;
-			msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
-			for (size_t i = 0; i < len; i++)
-				msg.append(to_string(m_buf.mText[offset + i]) + " ");
-			Log(msg, 2250);
-			offset += len + 1;
-
+			ParseStatusReport();
 			return type;
 
 		default:
@@ -983,6 +890,73 @@ public:
 		m_err = 0;
 		m_TotalMessageSent++;
 		return true;
+	}
+
+	void ParseStatusReport()
+	{
+		size_t TotalMsgReceived = 0;
+		size_t TotalMsgSent = 0;
+		int severity;
+		int offset = 0;
+		size_t len;
+		string msg;
+		string report;
+
+		// total messages sent
+		msg.assign(m_buf.mText + offset);
+		offset += msg.length() + 1;
+		memcpy(&len, m_buf.mText + offset + 1, sizeof(len));
+		report = msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len) + "\n";
+		offset += sizeof(len) + 1;
+		TotalMsgSent += len;
+
+		// total messages received
+		msg.assign(m_buf.mText + offset);
+		offset += msg.length() + 1;
+		memcpy(&len, m_buf.mText + offset, sizeof(len));
+		report += msg + "(" + to_string(m_buf.mText[offset]) + ") = " + to_string(len) + "\n";
+		offset += sizeof(len) + 1;
+		TotalMsgReceived += len;
+
+		// total database elements
+		msg.assign(m_buf.mText + offset);
+		offset += msg.length() + 1;
+		msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+		memcpy(&len, m_buf.mText + offset, sizeof(len));
+		msg.append(to_string(len));
+		report += msg + "\n";
+		offset += sizeof(len) + 1;
+
+		// states
+		msg.assign(m_buf.mText + offset);
+		offset += msg.length() + 1;
+		memcpy(&severity, m_buf.mText + offset, sizeof(severity));
+		offset += sizeof(severity);
+		report += msg + "\n";
+		offset++;
+
+		// subscriptions
+		msg.assign(m_buf.mText + offset);
+		len = msg.length();
+		offset += len + 1;
+		msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+		for (size_t i = 0; i < len; i++)
+			msg.append(to_string(m_buf.mText[offset + i]) + " ");
+		report += msg + "\n";
+		offset += len + 1;
+
+		// clients
+		msg.assign(m_buf.mText + offset);
+		len = msg.length();
+		offset += len + 1;
+		msg.append("(" + to_string(m_buf.mText[offset++]) + ") = ");
+		for (size_t i = 0; i < len; i++)
+			msg.append(to_string(m_buf.mText[offset + i]) + " ");
+		report += msg + "\n";
+		offset += len + 1;
+
+		Log(report, 2250);
+		return;
 	}
 };
 
@@ -1029,10 +1003,6 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	cout << endl << "Main module starts. Waiting for clients to join...." << endl;
-
-	launcher->SndCmd("LogSeverityLevel=Debug", "MAIN");
-	launcher->SndCmd("AutoWatchdog=off", "MAIN");
-	launcher->SndCmd("AutoPublish=off", "MAIN");
 
 	for (int i = 2; i < 256; i++)
 		if (launcher->RunService(i))

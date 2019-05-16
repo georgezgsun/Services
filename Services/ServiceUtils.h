@@ -15,8 +15,13 @@
 #define CMD_SERVICEDATA 11
 #define CMD_COMMAND 12
 #define CMD_STATUS 13
+#define CMD_PUBLISHDATA 14
 #define CMD_STRING 32
 #define CMD_INTEGER 33
+#define CTL_BLOCKING 8
+#define CTL_AUTOPUBLISH 4
+#define CTL_AUTOWATCHDOG 2
+#define CTL_AUTOSLEEP 1
 
 using namespace std;
 
@@ -69,14 +74,10 @@ protected:
 
 	size_t m_TotalDatabaseElements;  // store total elements get from database
 	size_t m_IndexdbElements[255];  // store the index of database elements in Properties
-
 	long m_WatchdogTimer[255];  // Store the watchdog timers
 
 	size_t m_HeaderLength;  // The header length of message
 	int m_Severity; // The level of the log;  1-Critical, 2-Error, 3-Warning, 4-Information, 5-Debug, 6-Verbose;
-	bool m_AutoPublish;  // Enable service data been auto updated during ChkNewMsg
-	bool m_AutoWatchdog; // Enable watchdog been auto feed during ChkNewMsg
-	bool m_AutoSleep;  // Enable auto sleep during ChkNewMsg
 
 	bool ReSendMsgTo(long ServiceChannel);
 
@@ -106,13 +107,12 @@ public:
 	bool SndMsg(void *p, size_t type, size_t len, string ServiceTitle); // Send a packet with given length to specified service provider with title
 	bool PublishServiceData(); // update and broadcast the service data if any data are changed
 
-	size_t ChkNewMsg();  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
+	size_t ChkNewMsg(int Control = 7);  // receive a new message. return is the message type. 0 means no new message. There is a 1ms sleep after in case there is no message.
 	string GetRcvMsg(); // receive a text message from specified service provider, like GPS, RADAR, TRIGGER.
 	size_t GetRcvMsgBuf(char **p); // return the pointer of the buffer and its length. This buffer will change in next message operation.
 
 	bool WatchdogFeed(); // smart feed the watchdog for this module in main module
-	bool Log(string logContent, int ErrorCode); // Send a log to main module which will save this log into database. It is controlled by log level
-	bool Log(string logContent); // Send a log to main module which will save this log into database. It is controlled by log level
+	bool Log(string logContent, int ErrorCode = 1000); // Send a log to main module which will save this log into database. It is controlled by log level
 
 	bool LocalMap(string keyword, void *p, char len); // map local *p with length len (0 for string) to be one of the local property, function in database actions and messages
 	bool LocalMap(string keyword, string *s); // assign string *s to be one of the local property, function in database actions and messages

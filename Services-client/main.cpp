@@ -48,8 +48,8 @@ int main(int argc, char *argv[])
 	tester->LocalMap("GPS Speeding Cancel", &SpeedDown);
 
 	tester->AddToServiceData("position", &position);
-	tester->AddToServiceData("latitute", &height);
-	tester->AddToServiceData("epoc", &time);
+	tester->AddToServiceData("altitute", &height);
+	tester->AddToServiceData("epoch", &time);
 
 	if (!tester->StartService())
 	{
@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
 		time = tv.tv_sec;
 
-		command = tester->ChkNewMsg();
+		command = tester->ChkNewMsg(CTL_AUTOPUBLISH | CTL_AUTOWATCHDOG | CTL_AUTOSLEEP);
 		if (command)
 		{
 			msg = tester->GetRcvMsg();
@@ -129,7 +129,8 @@ int main(int argc, char *argv[])
 
 			if (count <= 0)
 			{
-				//count = 5;
+				count = 5;
+				continue;
 				//break;
 				cout << datetime << " : " << myTitle << " counts down to " << count 
 					<< " with pid=" << getpid() << ", ppid=" << getppid() << "." << endl;
