@@ -210,6 +210,8 @@ public:
 
 		// For debug only
 		Log("Main module starts. There are " + to_string(count) + " stale messages in the message queue.");
+		fprintf(stderr, "The configure database is %s, the log database is %s.\n",
+			configPath.c_str(), logPath.c_str());
 
 		int ID;
 		string ConfTable;

@@ -184,41 +184,7 @@ ServiceUtils::~ServiceUtils()
 // Send a command in string to specified service provider.
 bool ServiceUtils::SndCmd(string msg, string ServiceTitle)
 {
-	// clear the buffer before any modifications
-	memset(&m_buf, 0, sizeof(m_buf));
-
-	if (m_ID == -1)
-	{
-		m_err = -1;  // Message queue has not been opened
-		return false;
-	}
-
-	m_buf.rChn = GetServiceChannel(ServiceTitle);
-	if (m_buf.rChn <= 0)
-	{
-		m_err = -2; // Cannot find the ServiceTitle in the list
-		return false;
-	}
-
-	struct timeval tv;
-	gettimeofday(&tv, nullptr);
-	m_buf.sChn = m_Chn;
-	m_buf.sec = tv.tv_sec;
-	m_buf.usec = tv.tv_usec;
-	m_buf.len = msg.length() + 1;
-	m_buf.type = CMD_COMMAND;
-
-	strcpy(m_buf.mText, msg.c_str());
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-	{
-		m_err = errno;
-		return false;
-	}
-	m_err = 0;
-	m_TotalMessageSent++;
-	if (m_buf.rChn == 1)
-		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-	return true;
+	return SndMsg((void*)msg.c_str(), CMD_COMMAND, msg.length() + 1, ServiceTitle);
 };
 
 // Send a packet with given length to specified service provider
@@ -236,8 +202,10 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, string ServiceTitle)
 // Send a packet with given length to specified service provider
 bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 {
+	struct MsgBuf s_buf; // setup a temporal sender buffer to avoid the poluttion on the receiving buffer
+
 	// clear the buffer before any modifications
-	memset(&m_buf, 0, sizeof(m_buf));
+	memset(&s_buf, 0, sizeof(s_buf));
 
 	if (m_ID == -1)
 	{
@@ -253,8 +221,8 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 		return false;
 	}
 
-	m_buf.rChn = ServiceChannel;
-	if (m_buf.rChn <= 0)
+	s_buf.rChn = ServiceChannel;
+	if (s_buf.rChn <= 0)
 	{
 		Log(m_Title + " got an invalid service channel " + to_string(ServiceChannel) + " while SndMsg.", 2);
 		m_err = -2; // Cannot find the ServiceTitle in the list
@@ -263,16 +231,16 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
-	m_buf.sChn = m_Chn;
-	m_buf.sec = tv.tv_sec;
-	m_buf.usec = tv.tv_usec;
-	m_buf.len = len;  // len is of 0-255, so do the cast here.
-	m_buf.type = type;
+	s_buf.sChn = m_Chn;
+	s_buf.sec = tv.tv_sec;
+	s_buf.usec = tv.tv_usec;
+	s_buf.len = len;  // len is of 0-255, so do the cast here.
+	s_buf.type = type;
 
-	memcpy(m_buf.mText, p, m_buf.len);
-	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+	memcpy(s_buf.mText, p, s_buf.len);
+	if (msgsnd(m_ID, &s_buf, s_buf.len + m_HeaderLength, IPC_NOWAIT))
 	{
-		printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", m_ID, len, m_HeaderLength);
+		printf("(Debug) Critical error. Unable to send the message through %d to channel %ld from %ld.\n", m_ID, s_buf.rChn, s_buf.sChn);
 		m_err = errno;
 		return false;
 	}
@@ -280,7 +248,7 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, long ServiceChannel)
 	m_err = 0;
 	m_TotalMessageSent++;
 	if (ServiceChannel == 1)
-		m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+		m_WatchdogTimer[s_buf.rChn] = s_buf.sec;  // set timer for next watchdog feed
 	return true;
 };
 
@@ -695,20 +663,21 @@ size_t ServiceUtils::ChkNewMsg(int control)
 					}
 				}
 
-				// check if not matched any local variable
-				if (i >= m_TotalProperties)
-					continue;  // no match then return
-
 				// type 0 means a string which shall be assigned the value in a different way
-				if (m_pptr[i]->len) 
+				if (n) 
 				{
-					memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
+					// check if not matched any local variable
+					if (i < m_TotalProperties)
+						memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
 					offset += n;
 				}
 				else
 				{
-					static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
-					offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+					// check if not matched any local variable
+					if (i < m_TotalProperties)
+						static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
+					//offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
+					offset += strlen(m_buf.mText + offset) + 1; // the length of the string
 				}
 			} while (offset < 255);
 
