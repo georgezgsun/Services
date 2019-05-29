@@ -30,6 +30,7 @@ int main(int argc, char *argv[])
 	string GPSType;
 	int last_baudrate{ 0 };
 	string position = "3258.1187N,09642.9508W";
+	string lastPosition;
 	int height = 202;
 	int time;
 	string ActiveTriggers;
@@ -78,7 +79,8 @@ int main(int argc, char *argv[])
 		snprintf(datetime, sizeof datetime, "%s.%06ld", tmbuf, tv.tv_usec);
 		time = tv.tv_sec;
 
-		command = tester->ChkNewMsg(CTL_AUTOPUBLISH | CTL_AUTOWATCHDOG | CTL_AUTOSLEEP);
+		//command = tester->ChkNewMsg(CTL_AUTOPUBLISH | CTL_AUTOWATCHDOG | CTL_AUTOSLEEP);
+		command = tester->ChkNewMsg( CTL_AUTOWATCHDOG | CTL_AUTOSLEEP);
 		if (command)
 		{
 			msg = tester->GetRcvMsg();

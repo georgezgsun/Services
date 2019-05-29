@@ -1,6 +1,7 @@
 #include <ctime>
 #include <chrono>
 #include <iostream>
+#include <fstream>
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/ipc.h>
@@ -31,16 +32,14 @@ string getDateTime(time_t tv_sec, time_t tv_usec)
 void *LogInsert(void * my_void_ptr)
 {
 	key_t t_Key = getpid();
-
-	//t_Key = 12345;
 	int t_ID = msgget(t_Key, 0444 | IPC_CREAT);  // message queue for read-only
 	long t_Chn = 2;
 	struct MsgBuf t_buf;
+
 	sqlite3_stmt * stmt;
-	sqlite3 *db;
+	sqlite3 *db; // = static_cast<sqlite3 *>(my_void_ptr);
 	string Titles[255];
 	string LogPath;
-	//LogPath.assign(static_cast<string *>(my_void_ptr)->c_str());
 	LogPath.assign(static_cast<const char *>(my_void_ptr));
 
 	// connect the logs database
@@ -86,6 +85,7 @@ void *LogInsert(void * my_void_ptr)
 			int TotalServices = 0;
 			char chn;
 
+			// Get the service list from the main thread
 			do
 			{
 				chn = t_buf.mText[offset++];
@@ -95,6 +95,7 @@ void *LogInsert(void * my_void_ptr)
 		}
 		else if (t_buf.type == CMD_STRING)
 		{
+			// Get the log file path from the main thread
 			LogPath.assign(t_buf.mText);
 			fprintf(stderr, "(LOG) Get new log path as %s.\n", LogPath.c_str());
 		}
@@ -148,27 +149,28 @@ public:
 
 	~MainModule()
 	{
-		sqlite3_close(m_Logdb);
+		sqlite3_close(m_ConfDB);
 	}
 
-	sqlite3 *m_Logdb;
-	sqlite3 *m_Confdb;
-	sqlite3_stmt *m_log;
+	sqlite3 *m_ConfDB;
+	sqlite3 *m_LogDB;
 	char m_ActionWatchdog[255];
 	pid_t m_Pids[255];
 	int m_LogSeverityLevel[255];
 	string m_ModulePath[255];
 	string m_ConfTable[255];
+	string m_Path;
+	string m_ConfPath;
 	sqlite3_stmt *m_ConfStatement[255];
 
 	// Main module startup
 	bool StartService(int argc, char *argv[])
 	{
-		string path(argv[0]);
-		int pos = path.find_last_of('/') + 1;  // include / at the end
-		path = path.substr(0, pos);
-		string logPath = path + "logs.db";
-		string configPath = path + "Roswell.db";
+		m_Path.assign(argv[0]);
+		int pos = m_Path.find_last_of('/') + 1;  // include / at the end
+		m_Path = m_Path.substr(0, pos);
+		string logPath = m_Path + "logs.db";
+		m_ConfPath = m_Path + "Roswell.db";
 
 		if (m_ID < 0 || m_Chn != 1)
 		{
@@ -178,27 +180,27 @@ public:
 		}
 
 		if (argc > 1)
-			configPath = path + argv[1];
+			m_ConfPath = m_Path + argv[1];
 		if (argc > 2)
-			logPath = path + argv[2];
+			logPath = m_Path + argv[2];
 
 		// connect the configure database
-		int rst = sqlite3_open(configPath.c_str(), &m_Confdb);
+		int rst = sqlite3_open(m_ConfPath.c_str(), &m_ConfDB);
 		if (rst)
 		{
 			m_err = -3;
 			fprintf(stderr, "Failed to open the Roswell configure database at %s with error: %s\n",
-				configPath.c_str(), sqlite3_errmsg(m_Confdb));
+				m_ConfPath.c_str(), sqlite3_errmsg(m_ConfDB));
 			return false;
 		}
 		m_err = 0;
 
 		// query the startup table in configure database
 		string sql = "SELECT * FROM STARTUP;";
-		m_err = sqlite3_prepare_v2(m_Confdb, sql.c_str(), sql.length(), &m_ConfStatement[0], 0); // the main module config query statement
+		m_err = sqlite3_prepare_v2(m_ConfDB, sql.c_str(), sql.length(), &m_ConfStatement[0], 0); // the main module config query statement
 		if (m_err)
 		{
-			fprintf(stderr, "Failed to prepare the query of startup table with error:%s.\n", sqlite3_errmsg(m_Confdb));
+			fprintf(stderr, "Failed to prepare the query of startup table with error:%s.\n", sqlite3_errmsg(m_ConfDB));
 			m_err = -4;
 			return false;
 		}
@@ -209,9 +211,9 @@ public:
 			count++;
 
 		// For debug only
-		Log("Main module starts. There are " + to_string(count) + " stale messages in the message queue.");
+		//Log("Main module starts. There are " + to_string(count) + " stale messages in the message queue.");
 		fprintf(stderr, "The configure database is %s, the log database is %s.\n",
-			configPath.c_str(), logPath.c_str());
+			m_ConfPath.c_str(), logPath.c_str());
 
 		int ID;
 		string ConfTable;
@@ -305,11 +307,11 @@ public:
 			if (ID)  // any positive number means to query only that ID
 				Statement.append(" WHERE ID=" + to_string(ID));
 			Statement.append(";");
-			m_err = sqlite3_prepare_v2(m_Confdb, Statement.c_str(), Statement.length(), &m_ConfStatement[Chn], 0);
+			m_err = sqlite3_prepare_v2(m_ConfDB, Statement.c_str(), Statement.length(), &m_ConfStatement[Chn], 0);
 			if (m_err)
 			{
 				fprintf(stderr, "Failed to prepare the query of configure table %s"
-					" with error:%s.\n", Statement.c_str(), sqlite3_errmsg(m_Confdb));
+					" with error:%s.\n", Statement.c_str(), sqlite3_errmsg(m_ConfDB));
 				return false;
 			}
 
@@ -317,7 +319,6 @@ public:
 			m_TotalServices++;
 		} while (true);
 
-		// TODO
 		// Start the log thread and send the logPath
 		pthread_t thread;
 		rst = pthread_create(&thread, NULL, LogInsert, (void *)logPath.c_str());
@@ -329,13 +330,71 @@ public:
 
 		// send the service list to Log thread
 		SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
+	
+
+		// TODO
+		// Let the pic to detect the startup of the main module by itself
+//#include <sys/types.h>
+//#include <dirent.h>
+//#include<unistd.h>
+//
+//#include <stdio.h>
+//#include <string.h>
+//#include <stdlib.h>
+//
+//		pid_t proc_find(const char* name)
+//		{
+//			DIR* dir;
+//			struct dirent* ent;
+//			char buf[512];
+//
+//			long  pid;
+//			char pname[100] = { 0, };
+//			char state;
+//			FILE *fp = NULL;
+//
+//			if (!(dir = opendir("/proc"))) {
+//				perror("can't open /proc");
+//				return -1;
+//			}
+//
+//			while ((ent = readdir(dir)) != NULL) {
+//				long lpid = atol(ent->d_name);
+//				if (lpid < 0)
+//					continue;
+//				snprintf(buf, sizeof(buf), "/proc/%ld/stat", lpid);
+//				fp = fopen(buf, "r");
+//
+//				if (fp) {
+//					if ((fscanf(fp, "%ld (%[^)]) %c", &pid, pname, &state)) != 3) {
+//						printf("fscanf failed \n");
+//						fclose(fp);
+//						closedir(dir);
+//						return -1;
+//					}
+//					if (!strcmp(pname, name)) {
+//						fclose(fp);
+//						closedir(dir);
+//						return (pid_t)lpid;
+//					}
+//					fclose(fp);
+//				}
+//			}
+//
+//
+//			closedir(dir);
+//			return -1;
+//		}
+
+		//int main(int argc, char* argv[])
+		//{
 
 		// send the key of the message queue to the pic
 		key_t key = 12345;
 		int p_ID = msgget(key, 0666 | IPC_CREAT);
 
 		m_buf.rChn = 1;
-		m_buf.sChn = getpid();
+		m_buf.sChn = getpid();  // This is the key
 		m_buf.len = 0;
 
 		if (msgsnd(p_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
@@ -543,7 +602,7 @@ public:
 			{
 				if (!ID) // if get no successful query before
 				{
-					fprintf(stderr, "Failed to query config table of %s with error:%s.\n", GetServiceTitle(m_MsgChn).c_str(), sqlite3_errmsg(m_Confdb));
+					fprintf(stderr, "Failed to query config table of %s with error:%s.\n", GetServiceTitle(m_MsgChn).c_str(), sqlite3_errmsg(m_ConfDB));
 					m_err = -6;
 					return false;
 				}
@@ -653,58 +712,175 @@ public:
 
 	void ParseDBUpdate()
 	{
+		string sql = ""; 
+		string ID = " WHERE ID=";
+		sqlite3_stmt *stmt;
+
 		// map the updated data from clients to local variables in main module
 		size_t offset = 0;
 		string keyword;
+		int i;
+		double t;
+		string value;
 		do
 		{
+			value.clear();
 			keyword.assign(m_buf.mText + offset); // read the keyword
 			offset += keyword.length() + 1; // there is a /0 in the end
 			if (keyword.empty()) // end of assignment when keyword is empty
-				return;
+				break;
 
 			char n = m_buf.mText[offset++]; // read data length, 0 represents for string
-			size_t i;
-			for (i = 0; i < m_TotalProperties; i++)
+			if (n == sizeof(int))
 			{
-				// check if the keyword matched
-				if (keyword.compare(m_pptr[i]->keyword) == 0)
-				{
-					// check the len/type matched or not
-					if (n != m_pptr[i]->len)
-					{
-						m_err = -121;
-						// This is a error 
-						Log(keyword + " from channel " + to_string(m_MsgChn) + " has length of "
-							+ to_string(n) + ", local's is of " + to_string(m_pptr[i]->len), 110); // an error with code 110
-						continue;  // continue to parse next one
-					}
-
-					// type 0 means a string which shall be assigned the value in a different way
-					if (m_pptr[i]->len)
-					{
-						memcpy(m_pptr[i]->ptr, m_buf.mText + offset, n);
-						offset += n;
-					}
-					else
-					{
-						static_cast<string *>(m_pptr[i]->ptr)->assign(m_buf.mText + offset);
-						offset += static_cast<string *>(m_pptr[i]->ptr)->length() + 1;
-					}
-
-					break;  // break for loop
-				}
+				memcpy(&i, m_buf.mText + offset, n);
+				value = to_string(i);
+				offset += n;
+			}
+			else if (n == sizeof(double))
+			{
+				memcpy(&t, m_buf.mText + offset, n);
+				value = to_string(t);
+				offset += n;
+			}
+			else if (n == 0)
+			{
+				value.assign(m_buf.mText + offset);
+				offset += value.length() + 1;
 			}
 
-			if (i >= m_TotalProperties)
+			if (!keyword.compare("ID"))
 			{
-				m_err = -120;
-				// This is a warning
-				Log(m_pptr[i]->keyword + " from channel " + to_string(m_MsgChn) + " does not match any local variables.", 600); // a warning with code 600
+				ID.append(value + ";");
+				continue;
 			}
+			
+			if (sql.empty())
+				sql = "UPDATE " + m_ConfTable[m_MsgChn] + " SET ";
+			else
+				sql.append(", ");
+			sql.append(keyword + "=" + value);		
 		} while (offset < 255);
 
+		// check if there is no update element
+		if (sql.find('=') == std::string::npos)
+		{
+			m_err = 125;
+			Log("There is no element in the database update request.", m_err);
+			return;
+		}
+
+		// assemble the final sql string
+		sql.append(ID);
+		m_err = sqlite3_prepare_v2(m_ConfDB, sql.c_str(), sql.length(), &stmt, 0); // the main module config query statement
+		if (m_err)
+		{
+			m_err = -390;
+			Log("Cannot prepare the update statement: " + sql + " with error: " + sqlite3_errmsg(m_ConfDB), -m_err);
+			return;
+		}
+
+		// execute the update statement
+		m_err = sqlite3_step(stmt);
+		if (m_err)
+		{
+			m_err = -391;
+			Log("Cannot execute the update statement: " + sql + " with error: " + sqlite3_errmsg(m_ConfDB), -m_err);
+		}
+		else
+			Log(sql);
+
+		sqlite3_finalize(stmt);
+		return;
 	};
+
+	// Export the given table to /tmp folder
+	bool ExportTable(string table)
+	{
+		sqlite3_stmt * stmt;
+		string sql;
+
+		// query the startup table in configure database
+		sql = "SELECT * FROM " + table + ";";
+		m_err = sqlite3_prepare_v2(m_ConfDB, sql.c_str(), sql.length(), &stmt, 0); 
+		if (m_err)
+		{
+			m_err = -293;
+			Log("Cannot prepare " + sql + " with error: " + sqlite3_errmsg(m_ConfDB), -m_err);
+			fprintf(stderr, "Failed to prepare %s with error:%s.\n", sql.c_str(), sqlite3_errmsg(m_ConfDB));
+			return false;
+		}
+
+		m_err = sqlite3_step(stmt);
+		if (m_err != SQLITE_ROW)
+		{
+			m_err = -294;
+			Log("Cannot execute " + sql + " with error : " + sqlite3_errmsg(m_ConfDB), -m_err);
+			fprintf(stderr, "Failed to execute %s with error:%s.\n", sql.c_str(), sqlite3_errmsg(m_ConfDB));
+			return false;
+		}
+
+		int count = sqlite3_column_count(stmt);
+		if (count < 1)
+		{
+			m_err = -295;
+			Log("The table " + table + " has not adequate columns.", -m_err);
+			fprintf(stderr, "The %s table has not adequate columns.\n", table.c_str());
+			return false;
+		}
+
+		ofstream file;
+		string filename = "\\tmp\\" + table + ".csv";
+		file.open(filename);
+
+		string Line = "";
+		for (int i = 0; i < count; i++)
+		{
+			Line.append((const char*)sqlite3_column_name(stmt, i));
+			Line.append(",");
+		}
+		file << Line.substr(0, Line.length() - 1) << endl;
+
+		do
+		{
+			Line.clear();
+			for (int i = 0; i < count; i++)
+			{
+				switch (sqlite3_column_type(stmt, i))
+				{
+				case SQLITE_INTEGER:
+					Line.append(to_string(sqlite3_column_int(stmt, i)) + ",");
+					break;
+
+				case SQLITE_FLOAT:
+					Line.append(to_string(sqlite3_column_double(stmt, i)) + ",");
+					break;
+
+				case SQLITE_TEXT:
+					Line.append((const char*)(sqlite3_column_text(stmt, i)));
+					Line.append(",");
+					break;
+
+				default:
+					Line.append(",");
+					Log("Unsupported type in table " + table + " at column " + to_string(i), 570); // A warning
+				}
+			}
+			file << Line.substr(0, Line.length() - 1) << endl;
+
+			m_err = sqlite3_step(stmt);
+		} while (m_err == SQLITE_ROW);
+		
+		file.close();
+		sqlite3_finalize(stmt);
+		Log("Exported the table " + table + " to " + filename);
+		return true;
+	}
+
+	bool ImportTable(string table)
+	{
+		return true;
+	}
 
 	size_t CheckWatchdog()
 	{
@@ -1020,6 +1196,17 @@ int main(int argc, char *argv[])
 		{
 			msg = launcher->GetRcvMsg();
 			cout << "MAIN gets a command " << msg << " from " << launcher->GetServiceTitle(launcher->m_MsgChn) << endl;
+
+			string cmd;
+			string arg;
+			
+			size_t offset = msg.find_first_of('=');  // find =
+			cmd = msg.substr(0, offset);  // keyword is left of =
+			arg = msg.substr(offset + 1); // now msg is right of =
+			if (!cmd.compare("Export"))
+				launcher->ExportTable(arg);
+			else if (!cmd.compare("Import"))
+				launcher->ImportTable(arg);
 		}
 
 		// check the watch dog

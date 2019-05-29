@@ -283,15 +283,20 @@ bool ServiceUtils::SubscribeService(string ServiceTitle)
 	long ServiceChannel = GetServiceChannel(ServiceTitle);
 	if (ServiceChannel < 1)
 	{
+		Log("Cannot subscribe any other services before been initialized.", 270);
 		m_err = -1;
 		return false;
 	}
 
 	if (m_Chn == 1)
+	{
+		Log("No service subscription is allowed for the main module.", 550);
 		return false; // No service subscribe for the main module
+	}
 
 	if (!SndMsg(nullptr, CMD_SUBSCRIBE, 0, ServiceChannel))
 	{
+		fprintf(stderr, "Message queue is full.");
 		m_err = -2;
 		return false;
 	}
@@ -299,12 +304,10 @@ bool ServiceUtils::SubscribeService(string ServiceTitle)
 	m_err = 0;
 	// check if the service has been subscribed before
 	for (size_t i = 0; i < m_TotalClients; i++)
-	{
 		if (m_Clients[i] == ServiceChannel)
 			return true;
-	}
 
-	// add the new subscription to my list
+	// add the new subscription to the list
 	m_Subscriptions[m_TotalSubscriptions++] = ServiceChannel;
 	return true;
 };
@@ -414,7 +417,7 @@ size_t ServiceUtils::ChkNewMsg(int control)
 	size_t offset = 0;
 	size_t type;
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
-	int flg = control & 0x08 ? 0 : IPC_NOWAIT;
+	int flg = control & CTL_BLOCKING ? 0 : IPC_NOWAIT;
 	struct timeval tv;
 
 	do
@@ -426,15 +429,15 @@ size_t ServiceUtils::ChkNewMsg(int control)
 		if (l < 0)
 		{
 			// Auto update the service data if enabled
-			if (control & 0x04)
+			if (control & CTL_AUTOPUBLISH)
 				PublishServiceData();
 
 			// Auto feed the watchdog if enabled.
-			if (control & 0x02)
+			if (control & CTL_AUTOWATCHDOG)
 				WatchdogFeed();
 
 			// Auto sleep for a short period of time (1ms) to reduce the CPU usage if enabled.
-			if (control & 0x01)
+			if (control & CTL_AUTOSLEEP)
 				clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
 			return 0;
@@ -598,7 +601,8 @@ size_t ServiceUtils::ChkNewMsg(int control)
 				if (j >= m_TotalDatabaseElements)
 					m_IndexdbElements[m_TotalDatabaseElements++] = i;
 			} while (offset < 255);
-			//break; // continue to read next message
+			if (control & CTL_CONTINUALDATARECEIVE)
+				break;  // continue to read next message
 			return type;  // return, no more auto parse; for list transfer
 
 		// auto process the message that a service is down.
@@ -681,6 +685,8 @@ size_t ServiceUtils::ChkNewMsg(int control)
 				}
 			} while (offset < 255);
 
+			if (control & CTL_CONTINUALDATARECEIVE)
+				break;  // continue to read next message
 			return type; // return when get a service data. No more auto parse
 
 		// Auto parse the system configurations
@@ -703,88 +709,12 @@ size_t ServiceUtils::ChkNewMsg(int control)
 					m_Severity = 4000;
 				return m_buf.type;
 			}
-			return type;
+			return type; // No more auto receiving and parsing when get a command 
 
 		case CMD_STATUS:
 			if (m_MsgChn != 1)
 				return type; // do not report status
-	
-			offset = 0;
-			struct timeval tv;
-			gettimeofday(&tv, nullptr);
-			m_buf.rChn = 1; // always report to main
-			m_buf.sChn = m_Chn;
-			m_buf.sec = tv.tv_sec;
-			m_buf.usec = tv.tv_usec;
-			m_buf.len = 0; // temperal value
-			m_buf.type = CMD_STATUS;
-			
-			strcpy(m_buf.mText + offset, "TotalSent");
-			offset += 10; // 1 + length of "TotalSent"
-			m_buf.mText[offset++] = sizeof(m_TotalMessageSent);
-			memcpy(m_buf.mText + offset, &m_TotalMessageSent, sizeof(m_TotalMessageSent));
-			offset += sizeof(m_TotalMessageSent);
-
-			strcpy(m_buf.mText + offset, "TotalReceived");
-			offset += 14; // 1 + length of "TotalReceived"
-			m_buf.mText[offset++] = sizeof(m_TotalMessageReceived);
-			memcpy(m_buf.mText + offset, &m_TotalMessageReceived, sizeof(m_TotalMessageReceived));
-			offset += sizeof(m_TotalMessageReceived);
-
-			strcpy(m_buf.mText + offset, "dbElements");
-			offset += 11; // 1 + length of "dbElements" 
-			m_buf.mText[offset++] = sizeof(m_TotalDatabaseElements);
-			memcpy(m_buf.mText + offset, &m_TotalDatabaseElements, sizeof(m_TotalDatabaseElements));
-			offset += sizeof(m_TotalDatabaseElements);
-
-			strcpy(m_buf.mText + offset, "States");
-			offset += 7; // 1 + length of "States" 
-			m_buf.mText[offset++] = sizeof(m_Severity); // it is a integer
-			memcpy(m_buf.mText + offset, &m_Severity, sizeof(m_Severity));
-			offset += sizeof(m_Severity);
-
-			strcpy(m_buf.mText + offset, "Subscriptions");
-			offset += 14; // length of Subscriptions\0
-			m_buf.mText[offset++] = 0; // 0 represents a string
-			for (size_t i = 0; i < m_TotalSubscriptions; i++)
-				m_buf.mText[offset++] = m_Subscriptions[i] & 0xFF;
-			m_buf.mText[offset++] = 0; // add 0 at the end of a string
-
-			m_buf.len = offset;
-			if (offset + 8 + m_TotalClients > 255)
-			{
-				if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-				{
-					m_err = errno;
-					return m_buf.type;
-				}
-				else
-				{
-					m_err = 0;
-					m_TotalMessageSent++;
-					m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-					offset = 0;
-				}
-			}
-
-			strcpy(m_buf.mText + offset, "Clients");
-			offset += 8; // length of Clients\0
-			m_buf.mText[offset++] = 0;  // 0 represents a string
-			for (size_t i = 0; i < m_TotalClients; i++)
-				m_buf.mText[offset++] = m_Clients[i];
-			m_buf.mText[offset++] = 0; // add 0 at the end of a string
-
-			m_buf.len = offset;
-			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-			{
-				m_err = errno;
-				return m_buf.type;
-			}
-
-			m_err = 0;
-			m_TotalMessageSent++;
-			m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
-			offset = 0;
+			ReportStatus();
 			break;
 
 		case CMD_PUBLISHDATA:
@@ -801,14 +731,86 @@ size_t ServiceUtils::ChkNewMsg(int control)
 					return false;
 			break;
 
+		case CMD_NULL:
+			return type;  // this is used to break the blocking read. No more auto receiving and parsing
+
 		default:
 			m_err = -50;
 			Log("Error! Unkown command " + to_string(m_buf.type) + " from " + to_string(m_buf.sChn), 1);
 			return type;
 		}
 
+		// no auto receiving and parsing for blocking read
+		if (!flg)
+			return type;
+
 	} while (m_err == 0);
 	return type;
+}
+
+// Report the healthy status of current service
+bool ServiceUtils::ReportStatus()
+{
+
+	int offset = 0;
+	struct timeval tv;
+	gettimeofday(&tv, nullptr);
+	m_buf.rChn = 1; // always report to main
+	m_buf.sChn = m_Chn;
+	m_buf.sec = tv.tv_sec;
+	m_buf.usec = tv.tv_usec;
+	m_buf.len = 0; // temperal value
+	m_buf.type = CMD_STATUS;
+
+	strcpy(m_buf.mText + offset, "TotalSent");
+	offset += sizeof("TotalSent")+ 1; 
+	m_buf.mText[offset++] = sizeof(m_TotalMessageSent);
+	memcpy(m_buf.mText + offset, &m_TotalMessageSent, sizeof(m_TotalMessageSent));
+	offset += sizeof(m_TotalMessageSent);
+
+	strcpy(m_buf.mText + offset, "TotalReceived");
+	offset += sizeof("TotalReceived") + 1; 
+	m_buf.mText[offset++] = sizeof(m_TotalMessageReceived);
+	memcpy(m_buf.mText + offset, &m_TotalMessageReceived, sizeof(m_TotalMessageReceived));
+	offset += sizeof(m_TotalMessageReceived);
+
+	strcpy(m_buf.mText + offset, "dbElements");
+	offset += sizeof("dbElements") + 1;
+	m_buf.mText[offset++] = sizeof(m_TotalDatabaseElements);
+	memcpy(m_buf.mText + offset, &m_TotalDatabaseElements, sizeof(m_TotalDatabaseElements));
+	offset += sizeof(m_TotalDatabaseElements);
+
+	strcpy(m_buf.mText + offset, "States");
+	offset += sizeof("States") + 1;
+	m_buf.mText[offset++] = sizeof(m_Severity); // it is a integer
+	memcpy(m_buf.mText + offset, &m_Severity, sizeof(m_Severity));
+	offset += sizeof(m_Severity);
+
+	strcpy(m_buf.mText + offset, "Subscriptions");
+	offset += sizeof("Subscriptions") + 1;
+	m_buf.mText[offset++] = 0; // 0 represents a string
+	for (size_t i = 0; i < m_TotalSubscriptions; i++)
+		m_buf.mText[offset++] = m_Subscriptions[i] & 0xFF;
+	m_buf.mText[offset++] = 0; // add 0 at the end of a string
+
+	strcpy(m_buf.mText + offset, "Clients");
+	offset += sizeof("Clients") + 1;
+	m_buf.mText[offset++] = 0;  // 0 represents a string
+	for (size_t i = 0; i < m_TotalClients; i++)
+		m_buf.mText[offset++] = m_Clients[i];
+	m_buf.mText[offset++] = 0; // add 0 at the end of a string
+
+	m_buf.len = offset;
+	if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+	{
+		m_err = errno;
+		return m_buf.type;
+	}
+
+	m_err = 0;
+	m_TotalMessageSent++;
+	m_WatchdogTimer[m_buf.rChn] = m_buf.sec;  // set timer for next watchdog feed
+	offset = 0;
 }
 
 // Feed the dog at watchdog main module

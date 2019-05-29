@@ -2,6 +2,7 @@
 
 #include <string>
 
+#define CMD_NULL 0
 #define CMD_ONBOARD 1
 #define CMD_LIST 2
 #define CMD_DATABASEUPDATE 3
@@ -18,7 +19,9 @@
 #define CMD_PUBLISHDATA 14
 #define CMD_STRING 32
 #define CMD_INTEGER 33
-#define CTL_BLOCKING 8
+
+#define CTL_BLOCKING 16
+#define CTL_CONTINUALDATARECEIVE 8
 #define CTL_AUTOPUBLISH 4
 #define CTL_AUTOWATCHDOG 2
 #define CTL_AUTOSLEEP 1
@@ -80,6 +83,7 @@ protected:
 	int m_Severity; // The level of the log;  1-Critical, 2-Error, 3-Warning, 4-Information, 5-Debug, 6-Verbose;
 
 	bool ReSendMsgTo(long ServiceChannel);
+	bool ReportStatus();
 
 private:
 	string m_Title;  // The title of this channel
