@@ -8,10 +8,10 @@
 
 using namespace std;
 
-// A demo instance of Trigger using services utils
+// A demo instance of Radar using services utils
 // 1. Test the setup of message queue on sub module
 // 2. Test the startup procedure between main module and sub module, including the read and download of the database configure tablet
-// 3. Test the cooperation between pic and Trigger, using the Trigger data from pic
+// 3. Test the cooperation between pic and Roswell, using the Radar data from pic
 // 4. Test message queue in blocking mode
 
 string getDateTime(time_t tv_sec, time_t tv_usec)
@@ -27,36 +27,31 @@ string getDateTime(time_t tv_sec, time_t tv_usec)
 
 int main(int argc, char *argv[])
 {
-	ServiceUtils *Trigger = new ServiceUtils(argc, argv);
+	ServiceUtils *Radar = new ServiceUtils(argc, argv);
 
 	int ID{ 0 };
-	string ActiveTriggers;
-	string OptionTriggers;
-	int SpeedUp;
-	int SpeedDown;
-	int lastSpeed{ 0 };
+	int baudrate{ 0 };
+	string RadarType;
+	string RadarData;
+	int last_baudrate{ 0 };
 	char *myBuf;
-	string myTriggers;
-	string lastTriggers{};
 
-	Trigger->LocalMap("ID", &ID);
-	Trigger->LocalMap("Active Triggers", &ActiveTriggers);
-	Trigger->LocalMap("Optional Triggers", &OptionTriggers);
-	Trigger->LocalMap("GPS Speeding Threshold", &SpeedUp);
-	Trigger->LocalMap("GPS Speeding Cancel", &SpeedDown);
+	Radar->LocalMap("ID", &ID);
+	Radar->LocalMap("BaudRate", &baudrate);
+	Radar->LocalMap("Type", &RadarType);
 
-	if (!Trigger->StartService())
+	if (!Radar->StartService())
 	{
-		cerr << endl << "Cannot setup the connection to the main module. Error=" << Trigger->m_err << endl;
+		cerr << endl << "Cannot setup the connection to the main module. Error=" << Radar->m_err << endl;
 		return -1;
 	}
 
-	long myChannel = Trigger->GetServiceChannel("");
-	string myTitle = Trigger->GetServiceTitle(myChannel);
+	long myChannel = Radar->GetServiceChannel("");
+	string myTitle = Radar->GetServiceTitle(myChannel);
 	cout << "Service provider " << myTitle << " is up at " << myChannel << endl;
 
 	// The demo of send a command
-	Trigger->SndCmd("Hello from " + myTitle + " module.", "1");
+	Radar->SndCmd("Hello from " + myTitle + " module.", "1");
 
 	size_t command;
 	struct timeval tv;
@@ -64,10 +59,10 @@ int main(int argc, char *argv[])
 	string msg;
 	while (true)
 	{
-		command = Trigger->ChkNewMsg(CTL_BLOCKING);
+		command = Radar->ChkNewMsg(CTL_BLOCKING);
 
 		gettimeofday(&tv, nullptr);
-		msg = Trigger->GetRcvMsg();
+		msg = Radar->GetRcvMsg();
 
 		// if CMD_DOWN is sent from others, no return
 		if (command == CMD_DOWN)
@@ -77,35 +72,33 @@ int main(int argc, char *argv[])
 		}
 		else if (command == CMD_COMMAND)
 		{
-			cout << myTitle << " gets a command '" << msg << "' from " << Trigger->m_MsgChn << endl;
+			cout << myTitle << " gets a command '" << msg << "' from " << Radar->m_MsgChn << endl;
 			continue;
 		}
 		else if (command == CMD_PUBLISHDATA)
 		{
-			size_t len = Trigger->GetRcvMsgBuf(&myBuf);
-			string tmp = Trigger->GetRcvMsg();
+			size_t len = Radar->GetRcvMsgBuf(&myBuf);
+			string tmp = Radar->GetRcvMsg();
 			size_t offset = tmp.length() + 2;
-			myTriggers.assign(myBuf + offset);
-			offset += myTriggers.length() + 1;
-			if (myTriggers.compare(lastTriggers))
+			RadarData.assign(myBuf + offset);
+			offset += RadarData.length() + 1;
+			if (RadarData.compare(RadarData))
 			{
 				cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : ";
-				cout << tmp << "=" << myTriggers << endl;
-				lastTriggers = myTriggers;
+				cout << tmp << "=" << RadarData << endl;
+				last_baudrate = baudrate;
 			}
 			offset += len;
 		}
 
-		if (lastSpeed != SpeedUp)
+		if (last_baudrate != baudrate)
 		{
 			cout << myTitle << " gets configured as: \nID=" << ID << endl
-				<< "Active Triggers: " << ActiveTriggers << endl
-				<< "Optional Triggers: " << OptionTriggers << endl
-				<< "GPS Speeding Threshold: " << SpeedUp << endl
-				<< "GPS Speeding Cancel: " << SpeedDown << endl;
-			lastSpeed = SpeedUp;
+				<< "Radar baud rate " << baudrate << endl
+				<< "Radar type: " << RadarType << endl;
+			last_baudrate = baudrate;
 		}
 
-		Trigger->WatchdogFeed();
+		Radar->WatchdogFeed();
 	}
 }

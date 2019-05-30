@@ -72,8 +72,13 @@ int main(int argc, char *argv[])
 		// if CMD_DOWN is sent from others, no return
 		if (command == CMD_DOWN)
 		{
-			cout << myTitle << " is down by the command from main module." << endl;
-			break;
+			if (Trigger->m_MsgChn == myChannel)
+			{
+				cout << myTitle << " is down by the command from main module." << endl;
+				break;
+			}
+			else
+				cout << " gets message that " << Trigger->GetServiceTitle(Trigger->m_MsgChn) << "is down." << endl;
 		}
 		else if (command == CMD_COMMAND)
 		{

@@ -514,7 +514,6 @@ public:
 			rst = kill(m_Pids[Channel], SIGTERM);
 		m_Pids[Channel] = 0;
 
-
 		if (rst < 0)
 		{
 			fprintf(stderr, "There is something wrong when killing service '%s' with errno=%d\n", m_ServiceTitles[Channel].c_str(), errno);
@@ -992,15 +991,28 @@ public:
 			return type;
 
 		case CMD_DOWN:
-			Log("Service " + msg + " reports down. Informs every sub modules.");
+			Log("Service " + msg + " reports down. Informs every other modules.");
+			fprintf(stderr, "Service %s reports down. Informs other channels at ", msg.c_str());
 
 			// to inform every running service module that this service has down
 			m_buf.sChn = m_MsgChn;
 			m_buf.len = 0;
 			m_buf.type = CMD_DOWN;
 			for (i = 0; i < m_TotalClients; i++)
-				ReSendMsgTo(m_Clients[i]);
+			{
+				if (i == m_MsgChn)
+				{
+					for (size_t j = i; j < m_TotalClients - 1; j++)
+						m_Clients[j] = m_Clients[j + 1];
+					m_TotalClients--;
+					continue;
+				}
 
+				ReSendMsgTo(m_Clients[i]);
+				fprintf(stderr, "%d, ", m_Clients[i]);
+			}
+
+			fprintf(stderr, " total %d.\n", m_TotalClients);
 			return type;
 
 			// Auto parse the system configurations
@@ -1175,6 +1187,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
+	//start main module
 	if (!launcher->StartService(argc, argv))
 	{
 		cerr << endl << "Cannot launch the headquater." << endl;
@@ -1182,14 +1195,17 @@ int main(int argc, char *argv[])
 	}
 	cout << endl << "Main module starts. Waiting for clients to join...." << endl;
 
-	for (int i = 2; i < 256; i++)
+	// launch all the sub modules
+	for (int i = 3; i < 256; i++)
 		if (launcher->RunService(i))
-			cout << "MAIN: Launch a new service on channel " << i << endl;
+			cout << "MAIN: Launches " << launcher->GetServiceTitle(i) << " service on channel " << i << endl;
 
-	// Simulate the main module/head working
+	// Main loop for main module
 	while (1)
 	{
-		// check if there is any new message sent to main module. These messages are not auto processed by the library.
+		// check if there is any new message sent to main module. 
+		// The main module works in blocking mode. 
+		// It has the CMD_COMMAND, CMD_ONBOARD, CMD_DATABASEQUERY, CMD_DATABASEUPDATE, CMD_DOWN, and CMD_STATUS auto processed
 		size_t type = launcher->ChkNewMsg();
 
 		if (type == CMD_COMMAND)
@@ -1216,14 +1232,14 @@ int main(int argc, char *argv[])
 			cout << "MAIN: watchdog warning. '" << launcher->GetServiceTitle(chn)
 				<< "' stops responding on channel " << chn << endl;
 
-			if (chn > 15)
-				continue;
 			if (!launcher->KillService(chn))
+			{
+				cout << "(MAIN) Cannot stop service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
 				continue;
+			}
 
 			if (launcher->RunService(chn))
 				cout << "MAIN restarts service " << launcher->GetServiceTitle(chn) << " at channel " << chn << endl;
-			continue;
 		}
 	}
 }

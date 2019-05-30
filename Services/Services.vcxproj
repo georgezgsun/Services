@@ -91,7 +91,7 @@
     <Link>
       <SharedLibrarySearchPath>/usr/local/lib;/usr/include;%(SharedLibrarySearchPath)</SharedLibrarySearchPath>
       <LibraryDependencies>pthread;sqlite3;%(LibraryDependencies)</LibraryDependencies>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(RemoteRootDir)/lib/libServicesUtils.so;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

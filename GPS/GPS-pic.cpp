@@ -71,8 +71,13 @@ int main(int argc, char *argv[])
 		// if CMD_DOWN is sent from others, no return
 		if (command == CMD_DOWN)
 		{
-			cout << "Module is down by the command from main module." << endl;
-			break;
+			if (GPS->m_MsgChn == myChannel)
+			{
+				cout << myTitle << " is down by the command from main module." << endl;
+				break;
+			}
+			else
+				cout << " gets message that " << GPS->GetServiceTitle(GPS->m_MsgChn) << "is down." << endl;
 		}
 		else if (command == CMD_COMMAND)
 		{

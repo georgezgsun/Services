@@ -74,10 +74,19 @@
   <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>/usr/include;/usr/local/include;$(IncludePath)</IncludePath>
+    <LibraryPath>/usr/lib;/usr/local/lib;$(LibraryPath)</LibraryPath>
+    <SourcePath>/usr/include;/usr/local/include;$(SourcePath)</SourcePath>
+  </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="Radar.cpp" />
   </ItemGroup>
-  <ItemDefinitionGroup />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Link>
+      <AdditionalDependencies>$(RemoteRootDir)/lib/libServicesUtils.so;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
