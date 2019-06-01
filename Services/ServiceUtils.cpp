@@ -142,7 +142,7 @@ bool ServiceUtils::StartService()
 	SndMsg(txt, CMD_ONBOARD, len, 1);
 
 	if (count)
-		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.", 4);
+		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.");
 	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
 	// Get initialization from the main module;
@@ -194,7 +194,7 @@ bool ServiceUtils::SndMsg(void *p, size_t type, size_t len, string ServiceTitle)
 	if (Chn)
 		return SndMsg(p, type, len, Chn);
 
-	Log(m_Title + " cannot find " + ServiceTitle + " in the service list while SndMsg().", 4);
+	Log(m_Title + " cannot find " + ServiceTitle + " in current service list while SndMsg().", 600);
 	m_err = -2;
 	return false;
 }
@@ -488,7 +488,7 @@ size_t ServiceUtils::ChkNewMsg(int control)
 			if (m_ServiceDataLength)
 				SndMsg(m_ServiceData, CMD_SERVICEDATA, m_ServiceDataLength, m_MsgChn); 
 
-			Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now I has " + to_string(m_TotalClients) + " clients.", 5);
+			Log("Got new service subscription from " + to_string(m_MsgChn) + ". Now have " + to_string(m_TotalClients) + " clients.", 2000);
 			break;
 			
 		case CMD_UNSUBSCRIBE:
@@ -502,7 +502,7 @@ size_t ServiceUtils::ChkNewMsg(int control)
 					m_TotalClients--;  // decrease m_TotalClients by 1
 				}
 
-			Log("Service subscription from " + to_string(m_MsgChn) + " is canceled. Now has " + to_string(m_TotalClients) + " clients.", 5);
+			Log("Service subscription from " + to_string(m_MsgChn) + " is canceled. Now have " + to_string(m_TotalClients) + " clients.", 2000);
 			break; // continue to read next messages
 
 		// auto reply the query of service data query
@@ -1138,3 +1138,14 @@ string ServiceUtils::GetServiceTitle(long serviceChannel)
 			return m_ServiceTitles[i];
 	return "";
 };
+
+string getDateTime(time_t tv_sec, time_t tv_usec)
+{
+	struct tm *nowtm;
+	char tmbuf[64], buf[64];
+
+	nowtm = localtime(&tv_sec);
+	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
+	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
+	return buf;
+}

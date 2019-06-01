@@ -14,17 +14,6 @@ using namespace std;
 // 3. Test the cooperation between pic and GPS, using the GPS data from pic
 // 4. Test message queue in blocking mode
 
-string getDateTime(time_t tv_sec, time_t tv_usec)
-{
-	struct tm *nowtm;
-	char tmbuf[64], buf[64];
-
-	nowtm = localtime(&tv_sec);
-	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
-	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
-	return buf;
-}
-
 int main(int argc, char *argv[])
 {
 	ServiceUtils *GPS = new ServiceUtils(argc, argv);

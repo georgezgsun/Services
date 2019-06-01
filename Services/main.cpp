@@ -18,16 +18,7 @@
 
 using namespace std;
 
-string getDateTime(time_t tv_sec, time_t tv_usec)
-{
-	struct tm *nowtm;
-	char tmbuf[64], buf[64];
-
-	nowtm = localtime(&tv_sec);
-	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
-	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
-	return buf;
-}
+string LogPath;
 
 void *LogInsert(void * my_void_ptr)
 {
@@ -39,8 +30,6 @@ void *LogInsert(void * my_void_ptr)
 	sqlite3_stmt * stmt;
 	sqlite3 *db; // = static_cast<sqlite3 *>(my_void_ptr);
 	string Titles[255];
-	string LogPath;
-	LogPath.assign(static_cast<const char *>(my_void_ptr));
 
 	// connect the logs database
 	int rst = sqlite3_open(LogPath.c_str(), &db);
@@ -50,8 +39,9 @@ void *LogInsert(void * my_void_ptr)
 			LogPath.c_str(), sqlite3_errmsg(db));
 		pthread_exit(NULL);
 	}
-	
-	string sql = "CREATE TABLE IF NOT EXISTS 'AppLog' ("
+	fprintf(stderr, "Open %s for the log database.\n", LogPath.c_str());
+
+	string sql = "CREATE TABLE IF NOT EXISTS 'Roswell' ("
 		"`ID`	INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
 		"`Date Time`	TEXT NOT NULL,"
 		"`Service`	TEXT NOT NULL,"
@@ -60,15 +50,20 @@ void *LogInsert(void * my_void_ptr)
 		"`Pid`	INTEGER	);";
 	rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
 	if (rst)
+	{
 		fprintf(stderr, "Failed to prepare the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+		pthread_exit(NULL);
+	}
+
 	rst = sqlite3_step(stmt);
 	if (rst)
-		fprintf(stderr, "Failed to execute the statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
+		fprintf(stderr, "The table has already been created. \n");
+	else
+		fprintf(stderr, "A new table has been created using %s \n", sql.c_str());
 	rst = sqlite3_finalize(stmt);
 
 	// prepare statement of log insert
-	//string sql = "INSERT INTO AppLog (Date Time, Service, Error Code, Content, Pid) VALUES (";
-	sql = "INSERT INTO AppLog VALUES ( null, ?, ?, ?, ?, ? );";
+	sql = "INSERT INTO Roswell VALUES ( null, ?, ?, ?, ?, ? );";
 	rst = sqlite3_prepare_v2(db, sql.c_str(), sql.length(), &stmt, 0);
 	if (rst != SQLITE_OK)
 		fprintf(stderr, "Failed to prepare statement %s with error: %s\n", sql.c_str(), sqlite3_errmsg(db));
@@ -81,7 +76,7 @@ void *LogInsert(void * my_void_ptr)
 
 		if (t_buf.type == CMD_LIST)
 		{
-			int offset = 0;
+			size_t offset = 0;
 			int TotalServices = 0;
 			char chn;
 
@@ -91,6 +86,7 @@ void *LogInsert(void * my_void_ptr)
 				chn = t_buf.mText[offset++];
 				Titles[chn].assign(t_buf.mText + offset);
 				offset += Titles[chn].length() + 1; // increase the m_TotalServices, update the offset to next
+				TotalServices++;
 			} while (offset < t_buf.len);
 		}
 		else if (t_buf.type == CMD_STRING)
@@ -169,7 +165,7 @@ public:
 		m_Path.assign(argv[0]);
 		int pos = m_Path.find_last_of('/') + 1;  // include / at the end
 		m_Path = m_Path.substr(0, pos);
-		string logPath = m_Path + "logs.db";
+		LogPath = m_Path + "StalkerLog.db";
 		m_ConfPath = m_Path + "Roswell.db";
 
 		if (m_ID < 0 || m_Chn != 1)
@@ -182,7 +178,7 @@ public:
 		if (argc > 1)
 			m_ConfPath = m_Path + argv[1];
 		if (argc > 2)
-			logPath = m_Path + argv[2];
+			LogPath = m_Path + argv[2];
 
 		// connect the configure database
 		int rst = sqlite3_open(m_ConfPath.c_str(), &m_ConfDB);
@@ -213,7 +209,7 @@ public:
 		// For debug only
 		//Log("Main module starts. There are " + to_string(count) + " stale messages in the message queue.");
 		fprintf(stderr, "The configure database is %s, the log database is %s.\n",
-			m_ConfPath.c_str(), logPath.c_str());
+			m_ConfPath.c_str(), LogPath.c_str());
 
 		int ID;
 		string ConfTable;
@@ -321,7 +317,8 @@ public:
 
 		// Start the log thread and send the logPath
 		pthread_t thread;
-		rst = pthread_create(&thread, NULL, LogInsert, (void *)logPath.c_str());
+		//rst = pthread_create(&thread, NULL, LogInsert, (void *)LogPath.c_str());
+		rst = pthread_create(&thread, NULL, LogInsert, nullptr);
 		if (rst)
 		{
 			printf("Cannot create the log thread. %d\n", rst);
@@ -331,7 +328,6 @@ public:
 		// send the service list to Log thread
 		SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
 	
-
 		// TODO
 		// Let the pic to detect the startup of the main module by itself
 //#include <sys/types.h>
@@ -405,7 +401,7 @@ public:
 		return true;
 	}
 
-	bool RunService(int Channel)
+	bool RunService(size_t Channel)
 	{
 		// Channel 1 and 2 are reserved for main and log
 		if (Channel < 3 || Channel > 255)
@@ -418,6 +414,9 @@ public:
 		// Not run the service module in case there is no path assigned
 		if (m_ModulePath[Channel].empty())
 			return false;
+
+		// Export the configure table as the configure file, where the path is /tmp/conf/<table name>.conf 
+		ExportTable(m_ConfTable[Channel]);
 
 		struct timeval tv;
 		gettimeofday(&tv, nullptr);
@@ -446,7 +445,7 @@ public:
 		return true;
 	}
 
-	bool KillService(long Channel)
+	bool KillService(size_t Channel)
 	{
 		// Channel 1 and 2 are reserved for main and log
 		if (Channel < 3 || Channel > 255)
@@ -793,11 +792,12 @@ public:
 		return;
 	};
 
-	// Export the given table to /tmp folder
+	// Export the given table to /tmp/conf folder
 	bool ExportTable(string table)
 	{
 		sqlite3_stmt * stmt;
 		string sql;
+		char split_char{ 9 }; // horizontal tab
 
 		// query the startup table in configure database
 		sql = "SELECT * FROM " + table + ";";
@@ -829,14 +829,14 @@ public:
 		}
 
 		ofstream file;
-		string filename = "\\tmp\\" + table + ".csv";
+		string filename = "/tmp/conf/" + table + ".conf";
 		file.open(filename);
 
 		string Line = "";
 		for (int i = 0; i < count; i++)
 		{
 			Line.append((const char*)sqlite3_column_name(stmt, i));
-			Line.append(",");
+			Line.append(1, split_char);
 		}
 		file << Line.substr(0, Line.length() - 1) << endl;
 
@@ -848,24 +848,26 @@ public:
 				switch (sqlite3_column_type(stmt, i))
 				{
 				case SQLITE_INTEGER:
-					Line.append(to_string(sqlite3_column_int(stmt, i)) + ",");
+					Line.append(to_string(sqlite3_column_int(stmt, i)));
+					Line.append(1, split_char);
 					break;
 
 				case SQLITE_FLOAT:
-					Line.append(to_string(sqlite3_column_double(stmt, i)) + ",");
+					Line.append(to_string(sqlite3_column_double(stmt, i)));
+					Line.append(1, split_char);
 					break;
 
 				case SQLITE_TEXT:
 					Line.append((const char*)(sqlite3_column_text(stmt, i)));
-					Line.append(",");
+					Line.append(1, split_char);
 					break;
 
 				default:
-					Line.append(",");
+					Line.append(1, split_char);
 					Log("Unsupported type in table " + table + " at column " + to_string(i), 570); // A warning
 				}
 			}
-			file << Line.substr(0, Line.length() - 1) << endl;
+			file << Line.substr(0, Line.length() - 1) << endl; // get rid of the last split char
 
 			m_err = sqlite3_step(stmt);
 		} while (m_err == SQLITE_ROW);
@@ -919,9 +921,7 @@ public:
 		size_t type = m_buf.type;
 		size_t offset;
 		pid_t pid, ppid;
-		size_t TotalMsgSent;
-		size_t TotalMsgReceived;
-		size_t len;
+		size_t len = l;
 
 		string keyword;
 		string msg;
@@ -1064,7 +1064,7 @@ public:
 		m_buf.type = CMD_LOG;
 
 		memcpy(m_buf.mText, &ErrorCode, sizeof(ErrorCode));
-		int offset = sizeof(ErrorCode);
+		size_t offset = sizeof(ErrorCode);
 		strcpy(m_buf.mText + offset, msg.c_str());
 		offset += msg.length() + 1;
 		m_buf.mText[offset++] = 0; // add a /0 in the end anyway
@@ -1087,7 +1087,7 @@ public:
 		size_t TotalMsgReceived = 0;
 		size_t TotalMsgSent = 0;
 		int severity;
-		int offset = 0;
+		size_t offset = 0;
 		size_t len;
 		string msg;
 		string report;

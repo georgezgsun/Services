@@ -28,6 +28,9 @@
 
 using namespace std;
 
+
+string getDateTime(time_t tv_sec, time_t tv_usec);
+
 // structure that defines properties, used to retrieve properties from database
 struct Property
 {
