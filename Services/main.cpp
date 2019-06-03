@@ -57,9 +57,9 @@ void *LogInsert(void * my_void_ptr)
 
 	rst = sqlite3_step(stmt);
 	if (rst)
-		fprintf(stderr, "The table has already been created. \n");
+		fprintf(stderr, "The Roswell table has already been created in %s. \n", LogPath.c_str());
 	else
-		fprintf(stderr, "A new table has been created using %s \n", sql.c_str());
+		fprintf(stderr, "A new table has been created using %s in %s.\n", sql.c_str(), LogPath.c_str());
 	rst = sqlite3_finalize(stmt);
 
 	// prepare statement of log insert
@@ -176,9 +176,9 @@ public:
 		}
 
 		if (argc > 1)
-			m_ConfPath = m_Path + argv[1];
+			m_ConfPath = argv[1];
 		if (argc > 2)
-			LogPath = m_Path + argv[2];
+			LogPath = argv[2];
 
 		// connect the configure database
 		int rst = sqlite3_open(m_ConfPath.c_str(), &m_ConfDB);
@@ -295,9 +295,20 @@ public:
 			m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
 
 			// prepare the query of configure table
-			int offset = m_ConfTable[Chn].find_first_of(':'); // position of :
-			ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
-			ID = atoi(m_ConfTable[Chn].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
+			size_t offset = m_ConfTable[Chn].find_first_of(':'); // position of :
+			if (offset == string::npos)
+			{
+				ConfTable = m_ConfTable[Chn];
+				ID = 0;
+			}
+			else
+			{
+				ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
+				ID = atoi(m_ConfTable[Chn].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
+				fprintf(stderr, "The configuration for %s is %s which is splitted as %s and %d.\n"
+					, m_ServiceTitles[Chn].c_str(), m_ConfTable[Chn].c_str(), ConfTable.c_str(), ID);
+			}
+
 			string Statement("SELECT * FROM ");
 			Statement.append(ConfTable);
 			if (ID)  // any positive number means to query only that ID
@@ -424,6 +435,8 @@ public:
 
 		int p;
 		bool rst{ true };
+		string s_title = "title=" + m_ModulePath[Channel];
+		string s_channel = "channel=" + to_string(Channel);
 
 		pid_t pid = fork();
 		if (pid == -1)
@@ -435,8 +448,8 @@ public:
 
 		if (pid == 0) // This is child process
 		{
-			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), to_string(Channel).c_str(), m_ServiceTitles[Channel].c_str());
-			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), Channel, m_ServiceTitles[Channel].c_str());
+			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), s_channel.c_str(), s_title.c_str());
+			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), s_channel.c_str(), s_title.c_str());
 			Log("Cannot start " + m_ModulePath[Channel], 13);  // log the critical error with code 13
 			return false;
 		}

@@ -24,16 +24,23 @@ int main(int argc, char *argv[])
 	int SpeedUp;
 	int SpeedDown;
 	int lastSpeed{ 0 };
-	char *myBuf;
 	string myTriggers;
 	string lastTriggers{};
 
+	// map those elements from configure database to local variables
 	Trigger->LocalMap("ID", &ID);
 	Trigger->LocalMap("Active Triggers", &ActiveTriggers);
 	Trigger->LocalMap("Optional Triggers", &OptionTriggers);
 	Trigger->LocalMap("GPS Speeding Threshold", &SpeedUp);
 	Trigger->LocalMap("GPS Speeding Cancel", &SpeedDown);
 
+	// map those elements from service data to local variables. This is the special implementation on PIC
+	Trigger->LocalMap("Trigger", &myTriggers);
+
+	// add the local variables to list of service data
+	Trigger->AddToServiceData("Trigger", &myTriggers);
+
+	// start and initialize the trigger service
 	if (!Trigger->StartService())
 	{
 		cerr << endl << "Cannot setup the connection to the main module. Error=" << Trigger->m_err << endl;
@@ -49,10 +56,12 @@ int main(int argc, char *argv[])
 
 	size_t command;
 	struct timeval tv;
-
 	string msg;
+	
+	// Main loop that provide the service
 	while (true)
 	{
+		// works in blocking read mode, the service data is provided by pic
 		command = Trigger->ChkNewMsg(CTL_BLOCKING);
 
 		gettimeofday(&tv, nullptr);
@@ -74,20 +83,15 @@ int main(int argc, char *argv[])
 			cout << myTitle << " gets a command '" << msg << "' from " << Trigger->m_MsgChn << endl;
 			continue;
 		}
-		else if (command == CMD_PUBLISHDATA)
+		else if (command == CMD_SERVICEDATA)
 		{
-			size_t len = Trigger->GetRcvMsgBuf(&myBuf);
-			string tmp = Trigger->GetRcvMsg();
-			size_t offset = tmp.length() + 2;
-			myTriggers.assign(myBuf + offset);
-			offset += myTriggers.length() + 1;
 			if (myTriggers.compare(lastTriggers))
 			{
-				cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : ";
-				cout << tmp << "=" << myTriggers << endl;
+				cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) 
+					<< " : Triggers=" << myTriggers << endl;
 				lastTriggers = myTriggers;
+				Trigger->PublishServiceData();
 			}
-			offset += len;
 		}
 
 		if (lastSpeed != SpeedUp)

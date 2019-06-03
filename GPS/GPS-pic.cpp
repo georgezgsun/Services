@@ -20,17 +20,32 @@ int main(int argc, char *argv[])
 
 	int ID{ 0 };
 	int baudrate{ 0 };
-	char *myBuf;
 	string GPSType;
 	int last_baudrate{ 0 };
 	string GPSPosition; //"3258.1187N,09642.9508W";
-	string GPSTime;
-	string GPSDate;
-	string GPSAltitute;
+	string GPSTime;  // 15:23:51
+	string GPSDate;  // 2019-05-29
+	string GPSAltitute; // 197.0(m)
+	string GPSSpeed; // 37.0(km/h)
 
+	// map those elements from configure database to local variables
 	GPS->LocalMap("ID", &ID);
 	GPS->LocalMap("BaudRate", &baudrate);
 	GPS->LocalMap("Type", &GPSType);
+
+	// map those elements from service data to local variables. This is the special implementation on PIC
+	GPS->LocalMap("position", &GPSPosition);
+	GPS->LocalMap("altitute", &GPSAltitute);
+	GPS->LocalMap("time", &GPSTime);
+	GPS->LocalMap("date", &GPSDate);
+	GPS->LocalMap("speed", &GPSSpeed);
+
+	// add the local variables to list of service data
+	GPS->AddToServiceData("position", &GPSPosition);
+	GPS->AddToServiceData("altitute", &GPSAltitute);
+	GPS->AddToServiceData("time", &GPSTime);
+	GPS->AddToServiceData("date", &GPSDate);
+	GPS->AddToServiceData("speed", &GPSSpeed);
 
 	if (!GPS->StartService())
 	{
@@ -47,10 +62,12 @@ int main(int argc, char *argv[])
 
 	size_t command;
 	struct timeval tv;
-
 	string msg;
+
+	// Main loop that provide the service
 	while (true)
 	{
+		// works in blocking read mode, the service data is provided by pic
 		command = GPS->ChkNewMsg(CTL_BLOCKING);
 
 		gettimeofday(&tv, nullptr);
@@ -73,32 +90,11 @@ int main(int argc, char *argv[])
 			cout << "Get a command '" << msg << "' from " << GPS->m_MsgChn << endl;
 			continue;
 		}
-		else if (command == CMD_PUBLISHDATA)
+		else if (command == CMD_SERVICEDATA)
 		{
-			int len = GPS->GetRcvMsgBuf(&myBuf);
-			string tmp = GPS->GetRcvMsg();
-			int offset = tmp.length() + 2;
-			GPSPosition.assign(myBuf + offset);
-			offset += GPSPosition.length() + 1;
-			cout << tmp << "=" << GPSPosition << ", ";
-
-			tmp.assign(myBuf + offset);
-			offset += tmp.length() + 2;
-			GPSAltitute.assign(myBuf + offset);
-			offset += GPSAltitute.length() + 1;
-			cout << tmp << "=" << GPSAltitute << ", ";
-
-			tmp.assign(myBuf + offset);
-			offset += tmp.length() + 2;
-			GPSTime.assign(myBuf + offset);
-			offset += GPSTime.length() + 1;
-			cout << tmp << "=" << GPSTime << ", ";
-
-			tmp.assign(myBuf + offset);
-			offset += tmp.length() + 2;
-			GPSDate.assign(myBuf + offset);
-			offset += GPSDate.length() + 1;
-			cout << tmp << "=" << GPSDate << flush;
+			cout << "(GPS) position=" << GPSPosition << ", altitute=" << GPSAltitute
+				<< ", speed=" << GPSSpeed << ", time=" << GPSTime << ", date=" << GPSDate << flush;
+			GPS->PublishServiceData();
 		}
 
 		if (last_baudrate != baudrate)

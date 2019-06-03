@@ -22,7 +22,6 @@ ServiceUtils::ServiceUtils()
 
 	m_Chn = 1;
 	m_Key = getpid();
-	//m_Key = 12345; // for debug purpose 
 	m_Title.assign("MAIN");
 
 	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
@@ -57,34 +56,61 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	// Get the key for the message queue from pid for main module, ppid for clients
 	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
 
-	if (argc <= 1)
+	if ((argc < 1) || (argc > 3))
 	{
-		m_Chn = 1;
-		m_Key = getpid();
-		m_Title.assign("MAIN");
-	}
-	else
-	{
-		m_Chn = atoi(argv[1]);
-		m_Key = getppid();
-		m_Title.clear();
-		m_err = m_Chn <= 0 ? -1 : 0;
+		fprintf(stderr, "Wrong number of arguments.\n");
+		fprintf(stderr, "Expected usage is %s [channel=service channel] [title=service title] [parentPID=ppid of main module].\n", argv[0]);
+		fprintf(stderr, "A configure file is written as \tmp\conf\[title].conf, which is exported from table [title] of the configuration database.\n");
+		exit(1);
 	}
 
-	if (argc > 2)
-		m_Title.assign(argv[2]);
+	// parse the arguments in JSON style
+	string cmd;
+	string arg;
+	size_t offset;
+	m_Key = getppid();
+	m_Title.clear();
+	m_Chn = 0;
 
-	//m_Key = 12345;  // This is for debug purpose
-	if (argc > 3)
-		m_Key = atoi(argv[3]);
-	if (m_Key < 0)
+	for (int i = 1; i < argc; i++)
 	{
-		printf("(Debug) Error. MsgQue Key = %d\n", m_Key);
-		m_err = -2;
-	}
+		cmd.assign(argv[i]);
+		offset = cmd.find_first_of('=');
 
+		// make it backward compatible with original position sensitive arguments
+		if (offset == string::npos)
+		{
+			if (i == 1)
+				cmd = "channel=" + cmd;
+			else if (i == 2)
+				cmd = "title=" + cmd;
+			else
+				cmd = "parentPID=" + cmd;
+			offset = cmd.find_first_of('=');
+		}
+		arg = cmd.substr(offset + 1); // argument is the right side of '='
+		cmd = cmd.substr(0, offset); // command is the left side of the '='
+
+		//fprintf(stderr, "Arguments %d is %s. It is splitted as %s %s.\n", i, argv[i], cmd.c_str(), arg.c_str());
+
+		if (!cmd.compare("title"))
+			m_Title = arg;
+		else if (!cmd.compare("channel"))
+			m_Chn = atoi(arg.c_str());
+		else if (!cmd.compare("parentPID"))
+			m_Key = atoi(arg.c_str());
+	}
+	//fprintf(stderr, "(%s): title=%s, channel=%ld, key=%ld.\n", m_Title.c_str(), m_Title.c_str(), m_Chn, m_Key);
+
+	// check if all the required arguments are specified correctly
+	if (m_Title.empty() || (m_Chn <= 0) || (m_Key <= 0))
+	{
+		fprintf(stderr, "Expected usage is %s [channel=service channel] [title=service title] [parentPID=ppid of main module].\n", argv[0]);
+		exit(1);
+	}
+		
 	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
-	printf("(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
+	fprintf(stderr, "(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
 	m_err = m_ID == -1 ? -3 : 0;
 
 	m_TotalClients = 0;
@@ -145,26 +171,30 @@ bool ServiceUtils::StartService()
 		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.");
 	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
-	// Get initialization from the main module;
+	// Get configurations from the main module;
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
-
 	count = 0;
 	do
 	{
+		// no auto publish, no auto sleep, and no auto watchdog feed in start
 		if (!ChkNewMsg(0))
 			clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
 
-		if (count++ >= 100)
+		count++;
+		if (count % 100 == 0)
 		{
-			Log("Cannot get the initialization messages from the main module in " 
-				+ to_string(count) + "ms. Error: " + to_string(m_err), 1);
-			m_err = -10;
-			return false;
+			// Log and print the warning
+			Log("Cannot get the configurations from the main module in " + to_string(count) + "ms.", 670); // a warning
+			fprintf(stderr, "(%s) Cannot get the configurations from the main module in %d ms.\n", m_Title.c_str(), count);
 		}
+
+		// quit after 1s
+		if (count > 1000)
+			exit(1);
 	} while (m_TotalServices <= 0);
 	Log(m_Title + " gets initialized in " + to_string(count) + "ms", 2000);  // This is debug information
 		
-	// Broadcast my onboard messages to all service channels other than the main module and myself
+	// Broadcast the onboard message
 	for (size_t i = 1; i < m_TotalServices; i++)
 		SndMsg(txt, CMD_ONBOARD, len, m_ServiceChannels[i]);
 
