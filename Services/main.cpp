@@ -295,24 +295,13 @@ public:
 			m_ServiceDataLength += m_ServiceTitles[Chn].length() + 1;
 
 			// prepare the query of configure table
-			size_t offset = m_ConfTable[Chn].find_first_of(':'); // position of :
-			if (offset == string::npos)
-			{
-				ConfTable = m_ConfTable[Chn];
-				ID = 0;
-			}
-			else
-			{
-				ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
-				ID = atoi(m_ConfTable[Chn].substr(offset + 1).c_str()); // ID number is the right of : , 0 or other digital means all
-				fprintf(stderr, "The configuration for %s is %s which is splitted as %s and %d.\n"
-					, m_ServiceTitles[Chn].c_str(), m_ConfTable[Chn].c_str(), ConfTable.c_str(), ID);
-			}
-
 			string Statement("SELECT * FROM ");
+			size_t offset = m_ConfTable[Chn].find_first_of(':'); // position of :
+			ConfTable = m_ConfTable[Chn].substr(0, offset); // table title is the left of the :
 			Statement.append(ConfTable);
-			if (ID)  // any positive number means to query only that ID
-				Statement.append(" WHERE ID=" + to_string(ID));
+			if (offset != string::npos && atoi(m_ConfTable[Chn].substr(offset + 1).c_str()) !=0)
+				Statement.append(" WHERE ID=" + m_ConfTable[Chn].substr(offset + 1)); // ID number is the right of : , 0 or other digital means all
+
 			Statement.append(";");
 			m_err = sqlite3_prepare_v2(m_ConfDB, Statement.c_str(), Statement.length(), &m_ConfStatement[Chn], 0);
 			if (m_err)
@@ -435,7 +424,7 @@ public:
 
 		int p;
 		bool rst{ true };
-		string s_title = "title=" + m_ModulePath[Channel];
+		string s_title = "title=" + m_ServiceTitles[Channel];
 		string s_channel = "channel=" + to_string(Channel);
 
 		pid_t pid = fork();
@@ -449,7 +438,7 @@ public:
 		if (pid == 0) // This is child process
 		{
 			execl(m_ModulePath[Channel].c_str(), m_ModulePath[Channel].c_str(), s_channel.c_str(), s_title.c_str());
-			fprintf(stderr, "Cannot start %s %d %s.\n", m_ModulePath[Channel].c_str(), s_channel.c_str(), s_title.c_str());
+			fprintf(stderr, "Cannot start %s %s %s.\n", m_ModulePath[Channel].c_str(), s_channel.c_str(), s_title.c_str());
 			Log("Cannot start " + m_ModulePath[Channel], 13);  // log the critical error with code 13
 			return false;
 		}
@@ -808,18 +797,23 @@ public:
 	// Export the given table to /tmp/conf folder
 	bool ExportTable(string table)
 	{
-		sqlite3_stmt * stmt;
-		string sql;
-		char split_char{ 9 }; // horizontal tab
+		// prepare the query of configure table
+		string Statement("SELECT * FROM ");
+		size_t offset = table.find_first_of(':'); // position of :
+		Statement.append(table.substr(0, offset)); // table title is the left of the :
+		if ((offset != string::npos) && atoi(table.substr(offset + 1).c_str()))
+			Statement.append(" WHERE ID=" + table.substr(offset + 1)); // ID number is the right of : , 0 or other digital means all
+		Statement.append(";");
 
 		// query the startup table in configure database
-		sql = "SELECT * FROM " + table + ";";
-		m_err = sqlite3_prepare_v2(m_ConfDB, sql.c_str(), sql.length(), &stmt, 0); 
+		sqlite3_stmt * stmt;
+		char split_char{ 9 }; // horizontal tab
+		m_err = sqlite3_prepare_v2(m_ConfDB, Statement.c_str(), Statement.length(), &stmt, 0);
 		if (m_err)
 		{
 			m_err = -293;
-			Log("Cannot prepare " + sql + " with error: " + sqlite3_errmsg(m_ConfDB), -m_err);
-			fprintf(stderr, "Failed to prepare %s with error:%s.\n", sql.c_str(), sqlite3_errmsg(m_ConfDB));
+			Log("Cannot prepare " + Statement + " while export the table with error: " + sqlite3_errmsg(m_ConfDB), -m_err);
+			fprintf(stderr, "Failed to prepare %s while export the table with error:%s.\n", Statement.c_str(), sqlite3_errmsg(m_ConfDB));
 			return false;
 		}
 
@@ -827,8 +821,8 @@ public:
 		if (m_err != SQLITE_ROW)
 		{
 			m_err = -294;
-			Log("Cannot execute " + sql + " with error : " + sqlite3_errmsg(m_ConfDB), -m_err);
-			fprintf(stderr, "Failed to execute %s with error:%s.\n", sql.c_str(), sqlite3_errmsg(m_ConfDB));
+			Log("Cannot execute " + Statement + " with error : " + sqlite3_errmsg(m_ConfDB), -m_err);
+			fprintf(stderr, "Failed to execute %s with error:%s.\n", Statement.c_str(), sqlite3_errmsg(m_ConfDB));
 			return false;
 		}
 
@@ -842,7 +836,7 @@ public:
 		}
 
 		ofstream file;
-		string filename = "/tmp/conf/" + table + ".conf";
+		string filename = "/tmp/conf/" + table.substr(0, offset) + ".conf";
 		file.open(filename);
 
 		string Line = "";

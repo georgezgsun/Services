@@ -26,6 +26,9 @@
 #define CTL_AUTOWATCHDOG 2
 #define CTL_AUTOSLEEP 1
 
+#define MAX_CHANNEL 256
+#define SHM_KEY 0x101
+
 using namespace std;
 
 
@@ -48,7 +51,15 @@ struct MsgBuf
 	long usec;   // timestamp usec
 	size_t type; // type of this property, first bit 0 indicates string, 1 indicates interger. Any value greater than 32 is a command.
 	size_t len;   //length of message payload in mText
-	char mText[255];  // message payload
+	char mText[MAX_CHANNEL];  // message payload
+};
+
+// structure that holds the whole shared memory that organized in ping-pong
+struct Shmseg
+{
+	char flags[MAX_CHANNEL];   // flags that indicates ping-pong, 0 for read in buf_a, non 0 for read in buf_b. Write in the other buffer.
+	char buf_a[MAX_CHANNEL][MAX_CHANNEL];  // 
+	char buf_b[MAX_CHANNEL][MAX_CHANNEL];
 };
 
 class ServiceUtils
@@ -56,34 +67,37 @@ class ServiceUtils
 
 protected:
 	struct MsgBuf m_buf;
-	int m_ID;
+	int m_ID;  // ID for message queue
 	long m_Chn; // my service channel
 
-	size_t m_TotalSubscriptions;  // the number of my subscriptions
-	long m_Subscriptions[255];
-	size_t m_TotalClients; // the number of clients who subscribe my service
-	long m_Clients[255];
+	int m_ShmID; // ID for shared memory
+	struct Shmseg *m_ShmP; // pointer to the shared memory
 
-	char m_ServiceData[255]; // store the latest service data that will be sent out per request
+	size_t m_TotalSubscriptions;  // the number of my subscriptions
+	long m_Subscriptions[MAX_CHANNEL];
+	size_t m_TotalClients; // the number of clients who subscribe my service
+	long m_Clients[MAX_CHANNEL];
+
+	char m_ServiceData[MAX_CHANNEL]; // store the latest service data that will be sent out per request
 	size_t m_ServiceDataLength; // store the length of service data
 	size_t m_TotalServiceDataElements;  // store total elements in service data
-	Property m_ServiceDataElements[255];  // store the Property of elements in service data 
+	Property m_ServiceDataElements[MAX_CHANNEL];  // store the Property of elements in service data 
 
 	size_t m_TotalServices;
-	string m_ServiceTitles[255];  // Service titles list got from main module
-	long m_ServiceChannels[255];  // Services Channels list got from main module
+	string m_ServiceTitles[MAX_CHANNEL];  // Service titles list got from main module
+	long m_ServiceChannels[MAX_CHANNEL];  // Services Channels list got from main module
 
 	size_t m_TotalProperties; 
 	long m_TotalMessageSent;
 	long m_TotalMessageReceived;
-	Property *m_pptr[255]; // Pointer to the Properties of theis module
+	Property *m_pptr[MAX_CHANNEL]; // Pointer to the Properties of theis module
 
 	size_t m_TotalDatabaseElements;  // store total elements get from database
-	size_t m_IndexdbElements[255];  // store the index of database elements in Properties
-	long m_WatchdogTimer[255];  // Store the watchdog timers
+	size_t m_IndexdbElements[MAX_CHANNEL];  // store the index of database elements in Properties
+	long m_WatchdogTimer[MAX_CHANNEL];  // Store the watchdog timers
 
 	size_t m_HeaderLength;  // The header length of message
-	int m_Severity; // The level of the log;  1-Critical, 2-Error, 3-Warning, 4-Information, 5-Debug, 6-Verbose;
+	int m_Severity; // The level of the log;  Critical:1-99, Error:100-499, Warning:500-999, Information:1000-1999, Debug:2000-2999, Verbose:3000-3999;
 
 	bool ReSendMsgTo(long ServiceChannel);
 	bool ReportStatus();
@@ -123,14 +137,19 @@ public:
 
 	bool LocalMap(string keyword, void *p, char len); // map local *p with length len (0 for string) to be one of the local property, function in database actions and messages
 	bool LocalMap(string keyword, string *s); // assign string *s to be one of the local property, function in database actions and messages
-	bool LocalMap(string keyword, int *n); // assign *n to to be one of the local property, function in database actions and messages
+	bool LocalMap(string keyword, int *n); // assign int *n to to be one of the local property, function in database actions and messages
+	bool LocalMap(string keyword, double *t); // assign double *t to to be one of the local property, function in database actions and messages
 
 	bool AddToServiceData(string keyword, void *p, char len); // assign *p with length len (0 for string) to be element
 	bool AddToServiceData(string keyword, string *s); // assign string *s to be element of the service data
 	bool AddToServiceData(string keyword, int *n); // assign int *n to be element of the service data
+	bool AddToServiceData(string keyword, double *t); // assign double *t to be element of the service data
 
-	 // send a command to the main module to ask for configures from the database. 
+	// send a command to the main module to ask for configures from the database. 
 	// The results will be auto parsed in ChkNewMsg() where configures are stored in variables mapped before or later.
 	bool QueryConfigures();
 	bool UpdateConfigures(); // send the configures back to main module and update the corresponding tables in the database.
+
+	bool ShmRead(long ServiceChannel, void *p, size_t len); // Read the shared memory buffer from specified channel. Make sure the *p has size of len at least
+	bool ShmWrite(void *p, size_t len); // Write into the shared memory buffer of my channel
 };

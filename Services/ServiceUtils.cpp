@@ -8,6 +8,7 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/time.h>
+#include <sys/shm.h>
 
 #include "ServiceUtils.h"
 
@@ -52,14 +53,15 @@ ServiceUtils::ServiceUtils()
 ServiceUtils::ServiceUtils(int argc, char *argv[])
 {
 	m_ID = -1;
+	m_ShmID = -1;
 	m_err = 0;
 	// Get the key for the message queue from pid for main module, ppid for clients
 	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
 
-	if ((argc < 1) || (argc > 3))
+	if ((argc < 1) || (argc > 4))
 	{
-		fprintf(stderr, "Wrong number of arguments.\n");
-		fprintf(stderr, "Expected usage is %s [channel=service channel] [title=service title] [parentPID=ppid of main module].\n", argv[0]);
+		fprintf(stderr, "Wrong number of arguments %d.\n", argc);
+		fprintf(stderr, "Expected usage is \n\t%s [channel=service channel] [title=service title] [parentPID=ppid of main module].\n", argv[0]);
 		fprintf(stderr, "A configure file is written as \tmp\conf\[title].conf, which is exported from table [title] of the configuration database.\n");
 		exit(1);
 	}
@@ -91,8 +93,6 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 		arg = cmd.substr(offset + 1); // argument is the right side of '='
 		cmd = cmd.substr(0, offset); // command is the left side of the '='
 
-		//fprintf(stderr, "Arguments %d is %s. It is splitted as %s %s.\n", i, argv[i], cmd.c_str(), arg.c_str());
-
 		if (!cmd.compare("title"))
 			m_Title = arg;
 		else if (!cmd.compare("channel"))
@@ -100,7 +100,6 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 		else if (!cmd.compare("parentPID"))
 			m_Key = atoi(arg.c_str());
 	}
-	//fprintf(stderr, "(%s): title=%s, channel=%ld, key=%ld.\n", m_Title.c_str(), m_Title.c_str(), m_Chn, m_Key);
 
 	// check if all the required arguments are specified correctly
 	if (m_Title.empty() || (m_Chn <= 0) || (m_Key <= 0))
@@ -109,9 +108,30 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 		exit(1);
 	}
 		
+	// setup the message queue
 	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
-	fprintf(stderr, "(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
-	m_err = m_ID == -1 ? -3 : 0;
+	if (m_ID == -1)
+	{
+		perror("Message queue");
+		m_err = -3;
+	}
+	fprintf(stderr, "(%s) MsgQue key: %d ID: %d\n", m_Title.c_str(), m_Key, m_ID);
+
+	// setup the shared memory
+	m_ShmID = shmget(SHM_KEY, sizeof(struct Shmseg), PERMS | IPC_CREAT);
+	if (m_ShmID == -1)
+	{
+		perror("Shared memory");
+		m_err = -3;
+	}
+
+	// Attach to the shared memory segment to get a pointer to it.
+	//m_ShmP = (struct Shmseg*)shmat(m_ShmID, NULL, SHM_RND);
+	//if (m_ShmP == (void *)-1)
+	//{
+	//	perror("Shared memory attach");
+	//	m_err = -3;
+	//}
 
 	m_TotalClients = 0;
 	m_TotalDatabaseElements = 0;
@@ -131,14 +151,16 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
 	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
 	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
+	fprintf(stderr, "(Debug) Shared memory ID: %d\n", m_ShmID);
 };
 
 // Start the service and do the initialization
 bool ServiceUtils::StartService()
 {
 	int count = 0;
-	if (m_ID < 0)
+	if (m_ID < 0 || m_ShmID < 0)
 	{
+		fprintf(stderr, "Message queue has an ID=%d, shared memory has an ID=%d\n", m_ID, m_ShmID);
 		m_err = -3;
 		return false;
 	}
@@ -150,6 +172,7 @@ bool ServiceUtils::StartService()
 	char txt[255];
 	pid_t pid = getpid();
 	pid_t ppid = getppid();
+	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
 	// Read off all messages to me in the queue before I startup
 	while (msgrcv(m_ID, &m_buf, sizeof(m_buf), m_Chn, IPC_NOWAIT) > 0)
@@ -169,7 +192,6 @@ bool ServiceUtils::StartService()
 
 	if (count)
 		Log(m_Title + " reads " + to_string(count) + " staled messages at startup.");
-	fprintf(stderr, "%s starts with pid=%ld, ppid=%ld.\n", m_Title.c_str(), pid, ppid);
 
 	// Get configurations from the main module;
 	struct timespec tim = { 0, 1000000L }; // 1ms = 1000000ns
@@ -782,7 +804,7 @@ size_t ServiceUtils::ChkNewMsg(int control)
 bool ServiceUtils::ReportStatus()
 {
 
-	int offset = 0;
+	size_t offset = 0;
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
 	m_buf.rChn = 1; // always report to main
@@ -913,7 +935,7 @@ bool ServiceUtils::Log(string logContent, int ErrorCode)
 		m_buf.sec = tv.tv_sec;  //update the timestamp
 		m_buf.usec = tv.tv_usec;
 
-		int offset = 0;
+		size_t offset = 0;
 		if (len > 200)
 			len = 200;
 		memcpy(m_buf.mText, &ErrorCode, sizeof(ErrorCode));
@@ -987,16 +1009,22 @@ bool ServiceUtils::LocalMap(string keyword, void *p, char len)
 	return true;
 }
 
-// assign *s to store the string queried from the database
+// assign string *s to store the string queried from the database
 bool ServiceUtils::LocalMap(string keyword, string *s)
 {
 	return LocalMap(keyword, s, 0);
 }
 
-// assign *n to store the integer queried from the database
+// assign int *n to store the integer queried from the database
 bool ServiceUtils::LocalMap(string keyword, int *n)
 {
 	return LocalMap(keyword, n, sizeof(int));
+}
+
+// assign double *t to store the integer queried from the database
+bool ServiceUtils::LocalMap(string keyword, double *t)
+{
+	return LocalMap(keyword, t, sizeof(double));
 }
 
 // assign *p with length len (0 for string) to be element
@@ -1054,6 +1082,12 @@ bool ServiceUtils::AddToServiceData(string keyword, int *n)
 	return AddToServiceData(keyword, n, sizeof(int));
 }
 
+// assign double *t to be element of the service data
+bool ServiceUtils::AddToServiceData(string keyword, double *t)
+{
+	return AddToServiceData(keyword, t, sizeof(double));
+}
+
 // Send a request to database main module to query for the value of keyword. The results will sent back automatically by main module.
 bool ServiceUtils::QueryConfigures()
 {
@@ -1083,11 +1117,11 @@ bool ServiceUtils::UpdateConfigures()
 	m_buf.sChn = m_Chn;
 	m_buf.sec = tv.tv_sec;
 	m_buf.usec = tv.tv_usec;
-	m_buf.len = 0; // temporal assigned to 0
 	m_buf.type = CMD_DATABASEUPDATE;
 
 	size_t offset = 0;
 	size_t i;
+
 	for (size_t j = 0; j < m_TotalDatabaseElements; j++)
 	{
 		i = m_IndexdbElements[j];
@@ -1168,6 +1202,94 @@ string ServiceUtils::GetServiceTitle(long serviceChannel)
 			return m_ServiceTitles[i];
 	return "";
 };
+
+// Read the shared memory buffer from specified channel. Make sure the *p has size of len at least
+bool ServiceUtils::ShmRead(long ServiceChannel, void *p, size_t len)
+{
+	if (m_ShmID < 0)
+	{
+		m_err = -410;
+		Log("Shared memory has not been setup yet.", -m_err);
+		return false;
+	}
+
+	if (ServiceChannel < 3 || ServiceChannel > 255)
+	{
+		m_err = -411;
+		Log("The channel specified is invalid while reading shared memory.", -m_err);
+		return false;
+	}
+
+	if (len > 255)
+	{
+		m_err = -412;
+		Log("The length specified is invalid while reading shared memory.", -m_err);
+		return false;
+	}
+
+	if (!p)
+	{
+		m_err = -413;
+		Log("The pointer specified cannot be null while reading shared memory.", -m_err);
+		return false;
+	}
+
+	// flags that indicates ping-pong buffers, 0 for read in buf_a, non 0 for read in buf_b. Write in the other buffer.
+	char flg = m_ShmP->flags[ServiceChannel];
+
+	// there is a risk that this memory copy will make the process crash
+	try
+	{
+		if (flg)
+			memcpy(p, m_ShmP->buf_b[ServiceChannel], len);
+		else
+			memcpy(p, m_ShmP->buf_a[ServiceChannel], len);
+	}
+	catch (int e)
+	{
+		Log("Error while reading shared memory with code " + to_string(e), 414);
+	}
+	return true;
+};
+
+// Write into the shared memory buffer of my channel
+bool ServiceUtils::ShmWrite(void *p, size_t len)
+{
+	if (m_ShmID < 0)
+	{
+		m_err = -410;
+		Log("Shared memory has not been setup yet.", -m_err);
+		return false;
+	}
+
+	if (len > 255)
+	{
+		m_err = -412;
+		Log("The length specified is invalid while writing shared memory.", -m_err);
+		return false;
+	}
+
+	if (!p)
+	{
+		m_err = -413;
+		Log("The pointer specified cannot be null while writing shared memory.", -m_err);
+		return false;
+	}
+
+	// flags that indicates ping-pong buffers, 0 for read in buf_a, non 0 for read in buf_b. Write in the other buffer.
+	char flg = m_ShmP->flags[m_Chn];
+	if (flg)
+	{
+		memcpy(m_ShmP->buf_a[m_Chn], p, len);
+		m_ShmP->flags[m_Chn] = 0; // toggle the flag
+	}
+	else
+	{
+		memcpy(m_ShmP->buf_b[m_Chn], p, len);
+		m_ShmP->flags[m_Chn] = 1; // toggle the flag
+	}
+	return true;
+}
 
 string getDateTime(time_t tv_sec, time_t tv_usec)
 {

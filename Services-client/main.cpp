@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
 	int baudrate{ 0 };
 	string GPSType;
 	int last_baudrate{ 0 };
-	string position = "3258.1187N,09642.9508W";
+	string position = "";
 	string lastPosition;
 	int height = 202;
 	int time;
