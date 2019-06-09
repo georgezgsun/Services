@@ -59,6 +59,9 @@ int main(int argc, char *argv[])
 
 	// The demo of send a command
 	GPS->SndCmd("Hello from " + myTitle + " module.", "1");
+	
+	// Subscribe the GPIO service
+	GPS->SubscribeService("GPIO");
 
 	size_t command;
 	struct timeval tv;
@@ -94,6 +97,7 @@ int main(int argc, char *argv[])
 		{
 			cout << "(GPS) position=" << GPSPosition << ", altitute=" << GPSAltitute
 				<< ", speed=" << GPSSpeed << ", time=" << GPSTime << ", date=" << GPSDate << flush;
+			GPSTime = GPSDate;
 			GPS->PublishServiceData();
 		}
 

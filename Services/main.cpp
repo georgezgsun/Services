@@ -18,7 +18,8 @@
 
 using namespace std;
 
-string LogPath;
+string LogPath;  // the path of the log database that used in the log thread
+string Titles[255];  // The service title that used in the log thread
 
 void *LogInsert(void * my_void_ptr)
 {
@@ -29,7 +30,6 @@ void *LogInsert(void * my_void_ptr)
 
 	sqlite3_stmt * stmt;
 	sqlite3 *db; // = static_cast<sqlite3 *>(my_void_ptr);
-	string Titles[255];
 
 	// connect the logs database
 	int rst = sqlite3_open(LogPath.c_str(), &db);
@@ -313,9 +313,12 @@ public:
 
 			// update the total service number
 			m_TotalServices++;
+
+			// assign the service title so that log thread may use it
+			Titles[Chn] = m_ServiceTitles[Chn];
 		} while (true);
 
-		// Start the log thread and send the logPath
+		// Start the log thread
 		pthread_t thread;
 		//rst = pthread_create(&thread, NULL, LogInsert, (void *)LogPath.c_str());
 		rst = pthread_create(&thread, NULL, LogInsert, nullptr);
@@ -325,78 +328,21 @@ public:
 			return false;
 		}
 
-		// send the service list to Log thread
-		SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
-	
-		// TODO
-		// Let the pic to detect the startup of the main module by itself
-//#include <sys/types.h>
-//#include <dirent.h>
-//#include<unistd.h>
-//
-//#include <stdio.h>
-//#include <string.h>
-//#include <stdlib.h>
-//
-//		pid_t proc_find(const char* name)
-//		{
-//			DIR* dir;
-//			struct dirent* ent;
-//			char buf[512];
-//
-//			long  pid;
-//			char pname[100] = { 0, };
-//			char state;
-//			FILE *fp = NULL;
-//
-//			if (!(dir = opendir("/proc"))) {
-//				perror("can't open /proc");
-//				return -1;
-//			}
-//
-//			while ((ent = readdir(dir)) != NULL) {
-//				long lpid = atol(ent->d_name);
-//				if (lpid < 0)
-//					continue;
-//				snprintf(buf, sizeof(buf), "/proc/%ld/stat", lpid);
-//				fp = fopen(buf, "r");
-//
-//				if (fp) {
-//					if ((fscanf(fp, "%ld (%[^)]) %c", &pid, pname, &state)) != 3) {
-//						printf("fscanf failed \n");
-//						fclose(fp);
-//						closedir(dir);
-//						return -1;
-//					}
-//					if (!strcmp(pname, name)) {
-//						fclose(fp);
-//						closedir(dir);
-//						return (pid_t)lpid;
-//					}
-//					fclose(fp);
-//				}
-//			}
-//
-//
-//			closedir(dir);
-//			return -1;
-//		}
+		//// send the service list to Log thread
+		//SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
 
-		//int main(int argc, char* argv[])
-		//{
+		//// send the key of the message queue to the pic
+		//key_t key = 12345;
+		//int p_ID = msgget(key, 0666 | IPC_CREAT);
 
-		// send the key of the message queue to the pic
-		key_t key = 12345;
-		int p_ID = msgget(key, 0666 | IPC_CREAT);
+		//m_buf.rChn = 1;
+		//m_buf.sChn = getpid();  // This is the key
+		//m_buf.len = 0;
 
-		m_buf.rChn = 1;
-		m_buf.sChn = getpid();  // This is the key
-		m_buf.len = 0;
-
-		if (msgsnd(p_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-			printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", p_ID, m_buf.len, m_HeaderLength);
-		else 
-			printf("(Debug) Send the key %ld to PIC tester via message %d.\n", m_buf.sChn, p_ID);
+		//if (msgsnd(p_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
+		//	printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", p_ID, m_buf.len, m_HeaderLength);
+		//else 
+		//	printf("(Debug) Send the key %ld to PIC tester via message %d.\n", m_buf.sChn, p_ID);
 
 		return true;
 	}

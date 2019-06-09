@@ -12,52 +12,18 @@
 
 #include "ServiceUtils.h"
 
-#define PERMS 0644
-
 ServiceUtils::ServiceUtils()
 {
-	m_ID = -1;
-	m_err = 0;
-	// Get the key for the message queue from pid for main module, ppid for clients
-	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
-
 	m_Chn = 1;
 	m_Key = getpid();
 	m_Title.assign("MAIN");
 
-	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
-	printf("(Debug) MsgQue key: %d ID: %d\n", m_Key, m_ID);
-	m_err = m_ID == -1 ? -3 : 0;
-
-	m_TotalClients = 0;
-	m_TotalDatabaseElements = 0;
-	m_TotalMessageReceived = 0;
-	m_TotalMessageSent = 0;
-	m_TotalProperties = 0;
-	m_TotalServiceDataElements = 0;
-	m_TotalServices = 0;
-	m_TotalSubscriptions = 0;
-	m_Severity = 2000;  // Information
-
-	memset(m_Clients, 0, sizeof(m_Clients));
-	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
-	memset(m_ServiceData, 0, sizeof(m_ServiceData));
-	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
-	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
-	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
-	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
-	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
+	Init();
 }
 
 // Constructor, where first argument is for the service channel, second is for the service title. Example 3 GPS
 ServiceUtils::ServiceUtils(int argc, char *argv[])
 {
-	m_ID = -1;
-	m_ShmID = -1;
-	m_err = 0;
-	// Get the key for the message queue from pid for main module, ppid for clients
-	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
-
 	if ((argc < 1) || (argc > 4))
 	{
 		fprintf(stderr, "Wrong number of arguments %d.\n", argc);
@@ -108,50 +74,7 @@ ServiceUtils::ServiceUtils(int argc, char *argv[])
 		exit(1);
 	}
 		
-	// setup the message queue
-	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
-	if (m_ID == -1)
-	{
-		perror("Message queue");
-		m_err = -3;
-	}
-	fprintf(stderr, "(%s) MsgQue key: %d ID: %d\n", m_Title.c_str(), m_Key, m_ID);
-
-	// setup the shared memory
-	m_ShmID = shmget(SHM_KEY, sizeof(struct Shmseg), PERMS | IPC_CREAT);
-	if (m_ShmID == -1)
-	{
-		perror("Shared memory");
-		m_err = -3;
-	}
-
-	// Attach to the shared memory segment to get a pointer to it.
-	//m_ShmP = (struct Shmseg*)shmat(m_ShmID, NULL, SHM_RND);
-	//if (m_ShmP == (void *)-1)
-	//{
-	//	perror("Shared memory attach");
-	//	m_err = -3;
-	//}
-
-	m_TotalClients = 0;
-	m_TotalDatabaseElements = 0;
-	m_TotalMessageReceived = 0;
-	m_TotalMessageSent = 0;
-	m_TotalProperties = 0;
-	m_TotalServiceDataElements = 0;
-	m_TotalServices = 0;
-	m_TotalSubscriptions = 0;
-	m_Severity = 2000;  // The default severity level Info corresponds to error code < 2000
-
-	memset(m_Clients, 0, sizeof(m_Clients));
-	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
-	memset(m_ServiceData, 0, sizeof(m_ServiceData));
-	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
-	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
-	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
-	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
-	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
-	fprintf(stderr, "(Debug) Shared memory ID: %d\n", m_ShmID);
+	Init();
 };
 
 // Start the service and do the initialization
@@ -1289,6 +1212,58 @@ bool ServiceUtils::ShmWrite(void *p, size_t len)
 		m_ShmP->flags[m_Chn] = 1; // toggle the flag
 	}
 	return true;
+}
+
+// Clear all the variables in the class
+void ServiceUtils::Init()
+{
+	// Get the key for the message queue from pid for main module, ppid for clients
+	m_HeaderLength = sizeof(m_buf.sChn) + sizeof(m_buf.sec) + sizeof(m_buf.usec) + sizeof(m_buf.type) + sizeof(m_buf.len);
+
+	m_TotalClients = 0;
+	m_TotalDatabaseElements = 0;
+	m_TotalMessageReceived = 0;
+	m_TotalMessageSent = 0;
+	m_TotalProperties = 0;
+	m_TotalServiceDataElements = 0;
+	m_TotalServices = 0;
+	m_TotalSubscriptions = 0;
+	m_Severity = 2000;  // Information
+
+	memset(m_Clients, 0, sizeof(m_Clients));
+	memset(m_ServiceChannels, 0, sizeof(m_ServiceChannels));
+	memset(m_ServiceData, 0, sizeof(m_ServiceData));
+	memset(m_ServiceDataElements, 0, sizeof(m_ServiceDataElements));
+	memset(m_ServiceTitles, 0, sizeof(m_ServiceTitles));
+	memset(m_Subscriptions, 0, sizeof(m_Subscriptions));
+	memset(m_IndexdbElements, 0, sizeof(m_IndexdbElements));
+	memset(m_WatchdogTimer, 0, sizeof(m_WatchdogTimer));
+
+	// setup the message queue
+	m_ID = msgget(m_Key, PERMS | IPC_CREAT);
+	if (m_ID == -1)
+	{
+		perror("Message queue");
+		m_err = -3;
+	}
+	fprintf(stderr, "(%s) MsgQue key: %d ID: %d\n", m_Title.c_str(), m_Key, m_ID);
+
+	//// setup the shared memory
+	//m_ShmID = shmget(m_Key, sizeof(struct Shmseg), PERMS | IPC_CREAT);
+	//if (m_ShmID == -1)
+	//{
+	//	perror("Shared memory");
+	//	m_err = -3;
+	//}
+	//fprintf(stderr, "(Debug) Shared memory ID: %d\n", m_ShmID);
+
+	// Attach to the shared memory segment to get a pointer to it.
+	//m_ShmP = (struct Shmseg*)shmat(m_ShmID, NULL, SHM_RND);
+	//if (m_ShmP == (void *)-1)
+	//{
+	//	perror("Shared memory attach");
+	//	m_err = -3;
+	//}
 }
 
 string getDateTime(time_t tv_sec, time_t tv_usec)

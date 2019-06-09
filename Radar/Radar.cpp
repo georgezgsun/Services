@@ -52,6 +52,7 @@ int main(int argc, char *argv[])
 
 	// The demo of send a command
 	Radar->SndCmd("Hello from " + myTitle + " module.", "1");
+	Radar->SubscribeService("GPIO");
 
 	size_t command;
 	struct timeval tv;

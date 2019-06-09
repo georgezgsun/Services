@@ -53,6 +53,7 @@ int main(int argc, char *argv[])
 
 	// The demo of send a command
 	Trigger->SndCmd("Hello from " + myTitle + " module.", "1");
+	Trigger->SubscribeService("GPIO");
 
 	size_t command;
 	struct timeval tv;

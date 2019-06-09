@@ -29,6 +29,8 @@
 #define MAX_CHANNEL 256
 #define SHM_KEY 0x101
 
+#define PERMS 0644
+
 using namespace std;
 
 
@@ -99,10 +101,10 @@ protected:
 	size_t m_HeaderLength;  // The header length of message
 	int m_Severity; // The level of the log;  Critical:1-99, Error:100-499, Warning:500-999, Information:1000-1999, Debug:2000-2999, Verbose:3000-3999;
 
-	bool ReSendMsgTo(long ServiceChannel);
-	bool ReportStatus();
+	bool ReSendMsgTo(long ServiceChannel);  // re-send the message to another channel
+	bool ReportStatus();  // report the healthy status of message queue
+	void Init();  // Initialize the variables
 
-private:
 	string m_Title;  // The title of this channel
 	key_t m_Key;  // The key of the message queue
 
