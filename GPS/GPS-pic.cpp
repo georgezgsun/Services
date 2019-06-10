@@ -75,14 +75,15 @@ int main(int argc, char *argv[])
 
 		gettimeofday(&tv, nullptr);
 		msg = GPS->GetRcvMsg();
-		cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : "; 
+		//cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : "; 
 
 		// if CMD_DOWN is sent from others, no return
 		if (command == CMD_DOWN)
 		{
+			cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : ";
 			if (GPS->m_MsgChn == myChannel)
 			{
-				cout << myTitle << " is down by the command from main module." << endl;
+				cout << " Module is turned down by the command from main module." << endl;
 				break;
 			}
 			else
@@ -90,14 +91,19 @@ int main(int argc, char *argv[])
 		}
 		else if (command == CMD_COMMAND)
 		{
-			cout << "Get a command '" << msg << "' from " << GPS->m_MsgChn << endl;
+			cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) 
+				<< " : Get a command '" << msg << "' from " << GPS->m_MsgChn << endl;
 			continue;
 		}
 		else if (command == CMD_SERVICEDATA)
 		{
-			cout << "(GPS) position=" << GPSPosition << ", altitute=" << GPSAltitute
+			//if (GPSTime.empty())
+			//	GPSTime = GPSSpeed;
+			//if (GPSDate.empty())
+			//	GPSDate = GPSAltitute;
+			cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) 
+				<< " : position=" << GPSPosition << ", altitute=" << GPSAltitute
 				<< ", speed=" << GPSSpeed << ", time=" << GPSTime << ", date=" << GPSDate << flush;
-			GPSTime = GPSDate;
 			GPS->PublishServiceData();
 		}
 

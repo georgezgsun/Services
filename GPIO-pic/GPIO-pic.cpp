@@ -12,34 +12,73 @@
 
 using namespace std;
 
-// A pic between pic and GPS, Trigger, and Radar modules in Roswell
+// A GPIO module that talks with embeded picRoswell to get raw data for GPS, Trigger, and Radar modules in Roswell
 // 1. There are two threads in this module. 
-// 2. One thread periodicly sends pic query commands to picRoswell who will reply the outputs from the pic.
+// 2. The sub thread periodicly sends pic query commands (readGPS, readTrigger, and readRadar) to picRoswell who will reply the outputs from the pic.
 // 3. The main thread receives the pic outputs and publishes them to subscribers like GPS, Trigger, and Radar.
 // 4. The main thread reads from message queue in blocking mode
 
-static long t_Chn; // global variable to hold the service channel
-static int t_ID;  // global variable to hold the ID of the message queue
+static int t_Chn; // global variable to hold my service channel 
+static int m_ID; //  global variable to hold the ID of the main message queue
+static int t_ID;  // global variable to hold the ID of the message queue to picRoswell
+bool RadarOn = false; // a control of get Radar status. True is on, false is off;
+
+// These are the available commands that need to be sent to the pic
+string readSerialNumber = "B20525000100";
+string readGPS = "B2032200";
+string readRadar = "B2032300";
+string readTrigger = "B2032400";
+string readFirmwareVersion = "B20525070100";
+string readHardwareVersion = "B20525080100";
+string turnLEDOn = "B20541000100";
+string turnLEDOff = "B20541000000";
+string turnMIC1On = "B2063200020100";
+string turnMIC1Off = "B2063200020000";
+string turnMIC2On = "B2063200010100";
+string turnMIC2Off = "B2063200010100";
+string setHeartbeatOn = "B204F10100";
+string setHeartbeatOff = "B204F10000";
+string getSystemIssueFlags = "B2032700";
 
 // pic timer thread periodically (every 50ms) sends a wakeup message to the main thread
 void *picTimer(void * my_void_ptr)
 {
 	struct MsgBuf t_buf;
-	t_buf.rChn = t_Chn;
-	t_buf.sChn = t_Chn;
+	t_buf.rChn = m_ID; // tell the picRoswell to reply using this message queue
+	t_buf.sChn = t_Chn; // tell the picRoswell to reply on this channel
 	t_buf.len = 0;
 	t_buf.type = CMD_NULL;
 	memset(t_buf.mText, 0, sizeof(t_buf.mText));
 	size_t HeaderLength = sizeof(t_buf.sChn) + sizeof(t_buf.sec) + sizeof(t_buf.usec) + sizeof(t_buf.type) + sizeof(t_buf.len);
 
-	struct timespec tim = { 0, 50000000L }; // 1ms = 1000000ns
+	struct timespec tim = { 0, 250000000L }; // 1ms = 1000000ns
+	int count = 0;
+	string cmd;
 	while (true)
 	{
-		// sleep for 50ms
-		//this_thread::sleep_for(chrono::milliseconds(50));
+		// sleep for 250ms
 		clock_nanosleep(CLOCK_REALTIME, 0, &tim, NULL);
-		if (msgsnd(t_ID, &t_buf, HeaderLength, IPC_NOWAIT))
-			printf("(Critical error) Unable to send the message to queue %d.\n", t_ID);
+		cmd = readTrigger; // read the trigger every 250ms 
+		count++;
+		if (count >= 4)
+			count = 0;
+		if (count == 1)
+			cmd.append(readGPS); // read GPS every 1000ms
+		if (count == 3 && RadarOn)
+			cmd.append(readRadar);  // read Radar every 1000ms if required
+
+		strcpy(t_buf.mText, cmd.c_str()); // put the cmd content into the buffer
+		t_buf.len = cmd.length() + 1;
+		if (msgsnd(t_ID, &t_buf, t_buf.len + HeaderLength, IPC_NOWAIT))
+		{
+			// Read off all messages in the queue when it is full
+			count = 0;
+			while (msgrcv(t_ID, &t_buf, sizeof(t_buf), 0, IPC_NOWAIT) > 0)
+				count++;
+			printf("The message queue %d with picRoswell is full. Read off %d staled messages from it.\n", 
+				t_ID, count);
+			count = 0;
+		}
 	};
 }
 
@@ -246,6 +285,7 @@ public:
 		m_buf.sec = tv.tv_sec;
 		m_buf.usec = tv.tv_usec;
 		m_buf.type = CMD_SERVICEDATA;
+		m_buf.len = m_ServiceDataLength;
 		memcpy(m_buf.mText, m_ServiceData, m_ServiceDataLength);
 
 		// The service provider will broadcast the service data to all its clients
@@ -260,11 +300,11 @@ public:
 			}
 		}
 
-		for (size_t i = 0; i < m_ServiceDataLength; i++)
-			if (m_ServiceData[i])
-				printf("%c", m_ServiceData[i]);
-			else
-				printf(" ");
+		//for (size_t i = 0; i < m_ServiceDataLength; i++)
+		//	if (m_ServiceData[i])
+		//		printf("%c", m_ServiceData[i]);
+		//	else
+		//		printf(" ");
 
 		return true;
 	}
@@ -272,23 +312,6 @@ public:
 
 int main(int argc, char *argv[])
 {
-	// These are the available commands that need to be sent to the pic
-	string readSerialNumber = "B20525000100";
-	string readGPS = "B2032200";
-	string readRadar = "B2032300";
-	string readTrigger = "B2032400";
-	string readFirmwareVersion = "B20525070100";
-	string readHardwareVersion = "B20525080100";
-	string turnLEDOn = "B20541000100";
-	string turnLEDOff = "B20541000000";
-	string turnMIC1On = "B2063200020100";
-	string turnMIC1Off = "B2063200020000";
-	string turnMIC2On = "B2063200010100";
-	string turnMIC2Off = "B2063200010100";
-	string setHeartbeatOn = "B204F10100";
-	string setHeartbeatOff = "B204F10000";
-	string getSystemIssueFlags = "B2032700";
-
 	// start and initialize the pic service
 	GPIOpic *pic = new GPIOpic(argc, argv);
 	if (!pic->StartService())
@@ -299,9 +322,9 @@ int main(int argc, char *argv[])
 
 	long myChannel = pic->GetServiceChannel("");
 	string myTitle = pic->GetServiceTitle(myChannel);
-	myChannel = 10;
-	t_Chn = myChannel; // global shared with sub thread
-	t_ID = pic->t_ID;
+	//myChannel = 10;
+	t_Chn = myChannel; // store the channel so that the sub thread knows my channel
+	m_ID = pic->t_ID;  // store the message queue ID so that the sub thread knows my message queue
 	cout << "Service provider " << myTitle << " is up at " << myChannel << endl;
 
 	// The demo of send a command
@@ -314,18 +337,19 @@ int main(int argc, char *argv[])
 	key_t g_Key = 0x04d8; // using VID of pic as the key
 	struct MsgBuf g_buf; // buffer for pic message queue
 	int g_ID = msgget(g_Key, 0666 | IPC_CREAT); // setup the message queue by which pic can be reached
+	t_ID = g_ID; // share the message ID with the sub thread in a goble variable
 	int g_HeaderLength = sizeof(g_buf.sChn) + sizeof(g_buf.sec) + sizeof(g_buf.usec) + sizeof(g_buf.type) + sizeof(g_buf.len);
-	printf("I can be reached using message queue of ID %d and of key %d.\n", g_ID, g_Key);
+	printf("Trying to reach picRoswell via message queue of ID %d or of key %d.\n", g_ID, g_Key);
 
-	g_buf.rChn = g_Key;
-	g_buf.sChn = myChannel;
+	g_buf.rChn = m_ID; // tell the picRoswell to reply using this message queue
+	g_buf.sChn = myChannel; // tell the picRoswell to reply on this channel
 	g_buf.len = 0;
 	g_buf.type = 0;
 	g_buf.sec = 0;
 	g_buf.usec = 0;
 	memset(g_buf.mText, 0, sizeof(g_buf.mText));
-	if (msgsnd(g_ID, &g_buf, g_buf.len + g_HeaderLength, IPC_NOWAIT))
-		printf("\n(Critical error) Unable to send the message to queue %d.\n", g_ID);
+	//if (msgsnd(g_ID, &g_buf, g_buf.len + g_HeaderLength, IPC_NOWAIT))
+	//	printf("\n(Critical error) Unable to send the message to queue %d.\n", g_ID);
 
 	// Start the timer thread
 	pthread_t thread;
@@ -373,6 +397,10 @@ int main(int argc, char *argv[])
 				cmd = turnMIC1On + turnMIC2On;
 			else if (!msg.compare("TurnMICOff"))
 				cmd = turnMIC1Off + turnMIC2Off;
+			else if (!msg.compare("RadarOn"))
+				RadarOn = true;
+			else if (!msg.compare("RadarOff"))
+				RadarOn = false;
 			else if (!msg.compare("ReadGPS"))
 				cmd = readGPS;
 			else if (!msg.compare("ReadTrigger"))
@@ -387,40 +415,14 @@ int main(int argc, char *argv[])
 		//if (command == CMD_SERVICEDATA && pic->m_MsgChn == myChannel)
 		if (command == CMD_SERVICEDATA)
 		{
-			cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : ";
+			//cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) << " : ";
 			pic->publishGPIOData();
-		}
-
-		if (command == CMD_NULL)
-		{
-			counter++;
-			if (counter >= 20)
-				counter = 0;
-
-			switch (counter)
-			{
-			case 0:
-			case 5:
-			case 10:
-			case 15:
-				cmd.append(readTrigger);
-				break;
-
-			case 3:
-				cmd.append(readGPS);
-				break;
-
-			case 13:
-				cmd.append(readRadar);
-				break;
-			}
 		}
 
 		if (!cmd.empty())
 		{
 			strcpy(g_buf.mText, cmd.c_str());
 			g_buf.len = cmd.length() + 1;
-			g_buf.rChn = t_ID;
 			if (msgsnd(g_ID, &g_buf, g_buf.len + g_HeaderLength, IPC_NOWAIT))
 				pic->Log("Cannot send command " + cmd + " to the picRoswell process.", 670);
 		}
