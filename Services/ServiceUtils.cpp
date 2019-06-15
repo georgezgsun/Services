@@ -602,11 +602,12 @@ size_t ServiceUtils::ChkNewMsg(int control)
 
 		// auto process the onboard message
 		case CMD_ONBOARD:
-			for (size_t i = 1; i < m_TotalSubscriptions; i++)
+			for (size_t i = 0; i < m_TotalSubscriptions; i++)
 				if (m_MsgChn == m_Subscriptions[i])
 				{
 					// re-subscribe the service when it is up again
 					SndMsg(nullptr, CMD_SUBSCRIBE, 0, m_MsgChn);
+					Log("Subscribe to " + GetServiceTitle(m_MsgChn) + " right after it is started.", 1210);
 					break;
 				}
 			break; // continue to read next message

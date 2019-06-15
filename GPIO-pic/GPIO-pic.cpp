@@ -295,7 +295,7 @@ public:
 			if (msgsnd(m_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
 			{
 				m_err = errno;
-				printf("\n%s Unable to publish the GPIOpic data to channel %d with error code %d.\n", getDateTime(tv.tv_sec, tv.tv_usec).c_str(), m_ID, m_err);
+				printf("\n%s Unable to publish the GPIOpic data to message queue %d with error code %d.\n", getDateTime(tv.tv_sec, tv.tv_usec).c_str(), m_ID, m_err);
 				return false;
 			}
 		}

@@ -152,7 +152,7 @@ public:
 	sqlite3 *m_LogDB;
 	char m_ActionWatchdog[255];
 	pid_t m_Pids[255];
-	int m_LogSeverityLevel[255];
+	string m_LogSeverityLevel[255];
 	string m_ModulePath[255];
 	string m_ConfTable[255];
 	string m_Path;
@@ -276,14 +276,7 @@ public:
 			}
 
 			read = sqlite3_column_text(m_ConfStatement[0], 6); //  The log severity level Info, Debug, Verbose
-			m_LogSeverityLevel[Chn] = 2000;
-			if (read)
-			{
-				if (!strcmp((const char*)read, "Debug"))
-					m_LogSeverityLevel[Chn] = 3000;
-				else if (!strcmp((const char*)read, "Verbose"))
-					m_LogSeverityLevel[Chn] = 4000;
-			}
+			m_LogSeverityLevel[Chn].assign((const char*)read);
 
 			// No further parse on main module
 			if (Chn == 1)
@@ -327,22 +320,6 @@ public:
 			printf("Cannot create the log thread. %d\n", rst);
 			return false;
 		}
-
-		//// send the service list to Log thread
-		//SndMsg(m_ServiceData, CMD_LIST, m_ServiceDataLength, 2);
-
-		//// send the key of the message queue to the pic
-		//key_t key = 12345;
-		//int p_ID = msgget(key, 0666 | IPC_CREAT);
-
-		//m_buf.rChn = 1;
-		//m_buf.sChn = getpid();  // This is the key
-		//m_buf.len = 0;
-
-		//if (msgsnd(p_ID, &m_buf, m_buf.len + m_HeaderLength, IPC_NOWAIT))
-		//	printf("(Debug) Critical error. Unable to send the message to channel %d. Message is of length %ld, and header length %ld.\n", p_ID, m_buf.len, m_HeaderLength);
-		//else 
-		//	printf("(Debug) Send the key %ld to PIC tester via message %d.\n", m_buf.sChn, p_ID);
 
 		return true;
 	}
@@ -914,15 +891,15 @@ public:
 
 			// reply databse query first
 			ReplyDBQuery();
-			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn), 2100); // a debug with code 2100
+			Log("Replies the configuration queried from database to channel " + to_string(m_MsgChn), 1100); // a debug with code 1100
 
 			// reply the log severity level next
-			SndCmd("LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]), msg);
-			Log("Send the command LogSeverityLevel=" + to_string(m_LogSeverityLevel[m_MsgChn]) + " to " + msg, 2100); // a debug log with code 2100
+			SndCmd("LogSeverityLevel=" + m_LogSeverityLevel[m_MsgChn], msg);
+			Log("Send the command LogSeverityLevel=" + m_LogSeverityLevel[m_MsgChn] + " to " + msg, 1100); // a debug log with code 1100
 
 			// reply service list to sub-module at the end
 			ReplyServiceList();
-			Log("Replies the service list to channel " + to_string(m_MsgChn), 2100); // a debug log with code 2100
+			Log("Replies the service list to channel " + to_string(m_MsgChn), 2100); // a debug log with code 1100
 
 			return type;
 

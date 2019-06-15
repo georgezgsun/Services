@@ -14,17 +14,6 @@ using namespace std;
 // 3. Test the cooperation between pic and Roswell, using the Radar data from pic
 // 4. Test message queue in blocking mode
 
-string getDateTime(time_t tv_sec, time_t tv_usec)
-{
-	struct tm *nowtm;
-	char tmbuf[64], buf[64];
-
-	nowtm = localtime(&tv_sec);
-	strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S", nowtm);
-	snprintf(buf, sizeof buf, "%s.%06ld", tmbuf, tv_usec);
-	return buf;
-}
-
 int main(int argc, char *argv[])
 {
 	ServiceUtils *Radar = new ServiceUtils(argc, argv);
@@ -74,7 +63,6 @@ int main(int argc, char *argv[])
 		else if (command == CMD_COMMAND)
 		{
 			cout << myTitle << " gets a command '" << msg << "' from " << Radar->m_MsgChn << endl;
-			continue;
 		}
 		else if (command == CMD_PUBLISHDATA)
 		{

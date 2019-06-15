@@ -93,14 +93,9 @@ int main(int argc, char *argv[])
 		{
 			cout << endl << "(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) 
 				<< " : Get a command '" << msg << "' from " << GPS->m_MsgChn << endl;
-			continue;
 		}
 		else if (command == CMD_SERVICEDATA)
 		{
-			//if (GPSTime.empty())
-			//	GPSTime = GPSSpeed;
-			//if (GPSDate.empty())
-			//	GPSDate = GPSAltitute;
 			cout << "\r(" << myTitle << ")" << getDateTime(tv.tv_sec, tv.tv_usec) 
 				<< " : position=" << GPSPosition << ", altitute=" << GPSAltitute
 				<< ", speed=" << GPSSpeed << ", time=" << GPSTime << ", date=" << GPSDate << flush;
@@ -113,7 +108,6 @@ int main(int argc, char *argv[])
 				<< " baud rate=" << baudrate
 				<< " and type=" << GPSType << ".\n";
 			last_baudrate = baudrate;
-			continue;
 		}
 
 		GPS->WatchdogFeed();
